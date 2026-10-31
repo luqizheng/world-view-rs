@@ -1,9 +1,11 @@
 //! 点选落笔 + hover 追踪（ADR-0057：点选进统一选区，EditCell 只画不选）。
 //!
-//! [ADR-0074]：CellMap（Topographic）工作区里点选器是**三段裁定**——
-//! 标签（2026-10-31 补：与浏览族同序，标签是更精确的靶子）> 图钉（点状
-//! POI）> 群系区（Nature Region）；格子选择已随 [ADR-0090] D2
-//! 移交圈选「单格」形状（[`commit_cell_shape_click`]，本文件下方）。
+//! [ADR-0074]（经 [ADR-0094] 修订，2026-10-31 用户裁定）：CellMap
+//! （Topographic）工作区里点选器是**「POI 命中优先，其余一律选群系」**——
+//! 标签 > 图钉（点状 POI）> 群系区（Nature Region 实体，自然层开着且命中
+//! 时）> **同群系连通域泛洪兜底**（群系区没创建也照样有得选）。精细的
+//! 格子选择（单格 / 泛洪判据 / 选区加减法）仍在圈选「单格」形状
+//! （[`commit_cell_shape_click`]，本文件下方）。
 //! 浏览族（其余模式）的命中在 `wv_render::drill::drill_pick`（追记一）：
 //! 那边标签命中之后接图钉，两边互不重叠。图钉命中纯函数
 //! [`wv_render::drill::pick_place_pin`] 两边共用；标签命中
@@ -227,10 +229,29 @@ pub fn commit_point_select_on_click(
             ) {
                 sel.clear();
                 projection.selection = Some(SelectedEntity::new(EntityKind::Region, id));
+                return;
+            }
+        }
+        // ── 群系兜底（ADR-0094，用户裁定 2026-10-31「除了点中 POI，否则都
+        // 应该是选择群系，哪怕它没有创建」）──
+        // 非 POI 命中的点击一律选中脚下格的**同群系连通域**（wv-terrain
+        // 泛洪，Biome 判据；与圈选「单格」的泛洪同一套机器）。群系区实体
+        // 建了就选实体（上一段，可改属性），没建也照样有得选（本段兜底）。
+        // 单焦点：写格让出实体选中。
+        if let Some(pick) = cell_pick::pick_at((cursor.x, cursor.y), &grid, terrain) {
+            let grid_terrain = crate::edit::flood_select::to_terrain_grid(terrain);
+            let cells = wv_terrain::cellops::flood_region(
+                &grid_terrain,
+                pick.gx,
+                pick.gy,
+                wv_terrain::cellops::FloodCriterion::Biome,
+            );
+            if !cells.is_empty() {
+                sel.replace(cells);
+                projection.selection = None;
             }
         }
     }
-    // （格子两档已移交圈选「单格」形状——点空地到这里 = 不动选区。）
 }
 
 /// 圈选「单格」形状的点击处理器（[ADR-0090] D3；2026-10-30 用户裁定：单格

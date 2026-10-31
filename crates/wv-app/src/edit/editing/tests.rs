@@ -1483,10 +1483,11 @@ fn point_select_in_cellmap_picks_nature_region_when_overlay_on() {
     );
 }
 
-/// 群系 overlay 关 → 默认点击 = **泛洪**（ADR-0074 追记四：与泛洪选择
-/// 同逻辑）。夹具 8×8 全同群系 → 点 (35,45) 淹出全图 64 格。
+/// [ADR-0094] 群系兜底：群系区实体**存在但 overlay 关**（看不见的实体
+/// 不可选）→ 点击退到**同群系连通域泛洪**——「哪怕它没有创建」的一半：
+/// 没创建泛洪格；建了但看不见也泛洪格。夹具 8×8 全同群系 → 淹全图 64 格。
 #[test]
-fn point_select_plain_click_no_longer_floods() {
+fn point_select_floods_biome_when_region_exists_but_overlay_off() {
     let mut world = cellmap_world(Vec2::new(35.0, 45.0), false);
     let map = wv_core::Id::new_unchecked("world_main");
     {
@@ -1509,16 +1510,45 @@ fn point_select_plain_click_no_longer_floods() {
     let sel = world.resource::<crate::state::CellSelection>();
     assert_eq!(
         sel.len(),
-        0,
-        "ADR-0090 D2：点选不再泛洪（泛洪点击归圈选「单格」形状），实际 {}",
+        64,
+        "ADR-0094 群系兜底：非 POI 点击 = 同群系泛洪，实际 {}",
         sel.len()
     );
     let projection = world.resource::<crate::state::WorldProjection>();
-    assert!(projection.selection.is_none());
+    assert!(
+        projection.selection.is_none(),
+        "泛洪写格 = 实体选中让位（单焦点模型）"
+    );
 }
 
-/// [ADR-0090 D2] 点选的 Alt 直选单格已退役（Alt 随格子职责移交圈选
-/// 「单格」形状的「选区加减法」）：Alt+左键不再抓格。
+/// [ADR-0094] 群系兜底的另一半：工程里**根本没有**群系区（jrpg-world
+/// 实况）→ 点击照样泛洪选中脚下群系。
+#[test]
+fn point_select_floods_biome_without_any_nature_region() {
+    let mut world = cellmap_world(Vec2::new(35.0, 45.0), false);
+    world.insert_resource(crate::state::PointSelectState { tool_active: true });
+    world.insert_resource(crate::state::CellSelection::default());
+    world.insert_resource(ButtonInput::<KeyCode>::default());
+    let mut buttons = ButtonInput::<MouseButton>::default();
+    buttons.press(MouseButton::Left);
+    world.insert_resource(buttons);
+
+    let mut schedule = Schedule::default();
+    schedule.add_systems(commit_point_select_on_click);
+    schedule.run(&mut world);
+
+    let sel = world.resource::<crate::state::CellSelection>();
+    assert_eq!(
+        sel.len(),
+        64,
+        "群系区未创建也应有得选（同群系泛洪），实际 {}",
+        sel.len()
+    );
+}
+
+/// [ADR-0090 D2 → ADR-0094] 点选的 Alt 直选单格已退役（Alt 随格子职责
+/// 移交圈选「单格」形状）：Alt+左键不再抓单格，但按群系兜底裁定照样
+/// **泛洪群系**（修饰键不改变「非 POI = 选群系」的语义）。
 #[test]
 fn alt_click_with_point_select_no_longer_grabs_cell() {
     let mut world = cellmap_world(Vec2::new(35.0, 45.0), false);
@@ -1536,7 +1566,12 @@ fn alt_click_with_point_select_no_longer_grabs_cell() {
     schedule.run(&mut world);
 
     let sel = world.resource::<crate::state::CellSelection>();
-    assert_eq!(sel.len(), 0, "点选的 Alt 抓格已退役，实际 {}", sel.len());
+    assert_eq!(
+        sel.len(),
+        64,
+        "Alt 不再抓单格（抓格归圈选），但群系兜底照样泛洪，实际 {}",
+        sel.len()
+    );
     let projection = world.resource::<crate::state::WorldProjection>();
     assert!(projection.selection.is_none());
 }
