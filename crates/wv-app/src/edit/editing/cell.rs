@@ -1,11 +1,13 @@
 //! 点选落笔 + hover 追踪（ADR-0057：点选进统一选区，EditCell 只画不选）。
 //!
-//! [ADR-0074]：CellMap（Topographic）工作区里点选器是**两段裁定**——
-//! 图钉（点状 POI）> 群系区（Nature Region）；格子选择已随 [ADR-0090] D2
+//! [ADR-0074]：CellMap（Topographic）工作区里点选器是**三段裁定**——
+//! 标签（2026-10-31 补：与浏览族同序，标签是更精确的靶子）> 图钉（点状
+//! POI）> 群系区（Nature Region）；格子选择已随 [ADR-0090] D2
 //! 移交圈选「单格」形状（[`commit_cell_shape_click`]，本文件下方）。
-//! 浏览族（其余模式）的图钉命中在 `wv_render::drill::drill_pick`（追记一）：
+//! 浏览族（其余模式）的命中在 `wv_render::drill::drill_pick`（追记一）：
 //! 那边标签命中之后接图钉，两边互不重叠。图钉命中纯函数
-//! [`wv_render::drill::pick_place_pin`] 两边共用。
+//! [`wv_render::drill::pick_place_pin`] 两边共用；标签命中
+//! [`wv_render::label_pick::hit_test`] 亦同源。
 
 use super::*;
 use wv_core::model::region::RegionKind;
@@ -110,6 +112,12 @@ pub fn commit_point_select_on_click(
     mut sel: ResMut<crate::state::CellSelection>,
     screen: Res<crate::app_screen::AppScreen>,
     mut link: ResMut<super::region::LassoLiveLink>,
+    // 标签命中表（2026-10-31 修复）：CellMap 里标签可见（ADR-0051 §7
+    // Topographic 开档）且命中表照常注册，但消费者只有浏览族 `drill_pick`
+    // （那边 Topographic 早退）——点标签文字毫无反应（用户实测）。
+    // Option 口径同下方双击束：生产 app 在 `drill::register` 恒注册，
+    // 部分单测夹具不装（只测裁定本身），缺席即跳过标签段。
+    label_hits: Option<Res<wv_render::label_pick::LabelHits>>,
     // 双击跟踪 + 属性窗体请求（ADR-0089 D2：CellMap 双击 = 照常裁定 +
     // 拉起 Inspector）。time/watch/请求折进元组——系统已顶 16 参上限；
     // Option 口径见函数文档。
@@ -180,10 +188,23 @@ pub fn commit_point_select_on_click(
     // 新选择动作 → 断开套索活链接（ADR-0057 补记 5）。
     link.deactivate();
 
-    // ── CellMap 裁定（[ADR-0090] D2 修订 [ADR-0074] 追记四）：图钉 > 群系区 ──
+    // ── CellMap 裁定（[ADR-0090] D2 修订 [ADR-0074] 追记四）：标签 > 图钉 > 群系区 ──
     // 仅 Topographic 档。格子两档（Alt 单格 / 默认泛洪）已移交圈选「单格」
     // 形状（下方 [`commit_cell_shape_click`]）——点选不再碰格子。
     if view.mode == ViewMode::Topographic {
+        // 标签命中优先（ADR-0017 §2.7，与浏览族 `drill_pick` 同序）：标签是
+        // 更精确的靶子，且 CellMap 的 rank≥2 地标「有 pin 必有名字」——
+        // 作者看到的「东港」三个字理应可点。命中表是上一帧注册的（本系统
+        // 在标签系统之前跑），按下那一刻相机尚未移动，包围盒仍然有效。
+        if layers.label.visible {
+            if let Some(hits) = label_hits.as_deref() {
+                if let Some(target) = wv_render::label_pick::hit_test(cursor, &hits.items) {
+                    sel.clear();
+                    projection.selection = Some(target);
+                    return;
+                }
+            }
+        }
         if let Some(id) = pick_place_pin(
             cursor,
             &projection.world,

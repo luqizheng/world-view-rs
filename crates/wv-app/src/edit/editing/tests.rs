@@ -1307,6 +1307,106 @@ fn cellmap_world(cursor: Vec2, nature_overlay: bool) -> bevy::prelude::World {
     world
 }
 
+/// CellMap 三段裁定第〇段（2026-10-31 补）：标签命中优先于图钉。
+///
+/// 背景：CellMap 的标签自 ADR-0051 §7 起可见且注册命中表，但消费者只有
+/// 浏览族 `drill_pick`（Topographic 早退）——点标签文字毫无反应（用户实测
+/// 「点东港不高亮」）。修复后 CellMap 与浏览族同序：标签 > 图钉 > 群系区。
+#[test]
+fn point_select_in_cellmap_picks_label_over_pin() {
+    let mut world = cellmap_world(Vec2::new(35.0, 45.0), false);
+    let map = wv_core::Id::new_unchecked("world_main");
+    {
+        let mut p = world.resource_mut::<crate::state::WorldProjection>();
+        p.world
+            .distances
+            .places
+            .push(pin("city_qingyun", &map, 35.0, 45.0));
+    }
+    // 标签命中表：命中框以光标为中心（模拟上一帧标签系统的注册）。
+    let mut hits = wv_render::label_pick::LabelHits::default();
+    hits.push(wv_render::label_pick::LabelHit {
+        center: Vec2::new(35.0, 45.0),
+        half: Vec2::new(20.0, 8.0),
+        target: wv_core::SelectedEntity::new(
+            wv_core::EntityKind::Place,
+            wv_core::Id::new_unchecked("city_qingyun"),
+        ),
+    });
+    world.insert_resource(hits);
+    world.insert_resource(crate::state::CellSelection::default());
+    world.insert_resource(crate::state::PointSelectState { tool_active: true });
+    world.insert_resource(ButtonInput::<KeyCode>::default());
+    let mut buttons = ButtonInput::<MouseButton>::default();
+    buttons.press(MouseButton::Left);
+    world.insert_resource(buttons);
+
+    let mut schedule = Schedule::default();
+    schedule.add_systems(commit_point_select_on_click);
+    schedule.run(&mut world);
+
+    let projection = world.resource::<crate::state::WorldProjection>();
+    let got = projection
+        .selection
+        .as_ref()
+        .map(|s| (s.kind, s.id.as_str()));
+    assert_eq!(
+        got,
+        Some((wv_core::EntityKind::Place, "city_qingyun")),
+        "点标签文字应选中该 Place，实际 {got:?}"
+    );
+}
+
+/// 标签层 hidden → 标签段让路，图钉照常可点（hidden 图层不可选，ADR-0090 D2）。
+#[test]
+fn point_select_in_cellmap_skips_label_hits_when_label_layer_hidden() {
+    let mut world = cellmap_world(Vec2::new(35.0, 45.0), false);
+    let map = wv_core::Id::new_unchecked("world_main");
+    {
+        let mut p = world.resource_mut::<crate::state::WorldProjection>();
+        p.world
+            .distances
+            .places
+            .push(pin("city_qingyun", &map, 35.0, 45.0));
+    }
+    let mut hits = wv_render::label_pick::LabelHits::default();
+    hits.push(wv_render::label_pick::LabelHit {
+        center: Vec2::new(35.0, 45.0),
+        half: Vec2::new(20.0, 8.0),
+        target: wv_core::SelectedEntity::new(
+            wv_core::EntityKind::Place,
+            wv_core::Id::new_unchecked("city_qingyun"),
+        ),
+    });
+    world.insert_resource(hits);
+    // 标签声明层关掉：LayerFrame::resolve(None, view) 的 label 槽沿会话开关
+    // （缺省 true）——这里显式置 false 模拟「标签层关闭」的会话态。
+    let mut layers = wv_render::layer_frame::LayerFrame::default();
+    layers.label.visible = false;
+    world.insert_resource(layers);
+    world.insert_resource(crate::state::CellSelection::default());
+    world.insert_resource(crate::state::PointSelectState { tool_active: true });
+    world.insert_resource(ButtonInput::<KeyCode>::default());
+    let mut buttons = ButtonInput::<MouseButton>::default();
+    buttons.press(MouseButton::Left);
+    world.insert_resource(buttons);
+
+    let mut schedule = Schedule::default();
+    schedule.add_systems(commit_point_select_on_click);
+    schedule.run(&mut world);
+
+    let projection = world.resource::<crate::state::WorldProjection>();
+    let got = projection
+        .selection
+        .as_ref()
+        .map(|s| (s.kind, s.id.as_str()));
+    assert_eq!(
+        got,
+        Some((wv_core::EntityKind::Place, "city_qingyun")),
+        "标签层关 = 标签命中让路，光标同时压在图钉上 → 仍选图钉，实际 {got:?}"
+    );
+}
+
 /// CellMap 三段裁定第一段：点在图钉上 → 选 Place 实体、清格选区（不写格）。
 #[test]
 fn point_select_in_cellmap_picks_place_pin_over_cell() {
