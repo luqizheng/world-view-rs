@@ -1483,6 +1483,58 @@ fn point_select_in_cellmap_picks_nature_region_when_overlay_on() {
     );
 }
 
+/// [ADR-0094 追记] 双击群系格 = 泛洪选中 + **打开笔刷面板**（CellMap 编辑
+/// 段所在——格子表单 2026-10-24 迁入笔刷窗，双击把编辑框带上，不让作者
+/// 猜「编辑框在哪里」）。实体双击仍拉 Inspector（别处已锚定）。
+#[test]
+fn double_click_on_biome_floods_and_opens_brush_panel() {
+    let mut world = cellmap_world(Vec2::new(35.0, 45.0), false);
+    world.insert_resource(crate::state::PointSelectState { tool_active: true });
+    world.insert_resource(crate::state::CellSelection::default());
+    let mut panels = crate::state::PanelState::default();
+    panels.visible.insert(crate::state::Panel::Brush, false);
+    world.insert_resource(panels);
+    world.insert_resource(bevy::time::Time::<()>::default());
+    let mut buttons = ButtonInput::<MouseButton>::default();
+    let mut schedule = Schedule::default();
+    schedule.add_systems(commit_point_select_on_click);
+
+    // 第一击：泛洪，笔刷面板不动。
+    buttons.press(MouseButton::Left);
+    world.insert_resource(buttons);
+    schedule.run(&mut world);
+    assert!(
+        !world
+            .resource::<crate::state::PanelState>()
+            .visible
+            .get(&crate::state::Panel::Brush)
+            .copied()
+            .unwrap_or(false),
+        "单击不该开笔刷面板"
+    );
+
+    // 第二击（同位同时窗）= 双击：泛洪 + 开笔刷面板。
+    let mut buttons = world
+        .remove_resource::<ButtonInput<MouseButton>>()
+        .expect("首击按钮应已插入");
+    buttons.release(MouseButton::Left);
+    buttons.press(MouseButton::Left);
+    world.insert_resource(buttons);
+    schedule.run(&mut world);
+
+    let sel = world.resource::<crate::state::CellSelection>();
+    assert_eq!(sel.len(), 64, "双击照常泛洪群系");
+    let panels = world.resource::<crate::state::PanelState>();
+    assert!(
+        panels
+            .visible
+            .get(&crate::state::Panel::Brush)
+            .copied()
+            .unwrap_or(false),
+        "双击群系格应打开笔刷面板（编辑框所在）"
+    );
+}
+
 /// [ADR-0094] 群系兜底：群系区实体**存在但 overlay 关**（看不见的实体
 /// 不可选）→ 点击退到**同群系连通域泛洪**——「哪怕它没有创建」的一半：
 /// 没创建泛洪格；建了但看不见也泛洪格。夹具 8×8 全同群系 → 淹全图 64 格。

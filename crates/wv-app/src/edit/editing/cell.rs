@@ -114,6 +114,9 @@ pub fn commit_point_select_on_click(
     mut sel: ResMut<crate::state::CellSelection>,
     screen: Res<crate::app_screen::AppScreen>,
     mut link: ResMut<super::region::LassoLiveLink>,
+    // 双击群系格 → 打开笔刷面板（ADR-0094 追记：格子编辑框所在，2026-10-24
+    // 自 Inspector 迁入笔刷窗）。
+    mut panels: ResMut<crate::state::PanelState>,
     // 标签命中表（2026-10-31 修复）：CellMap 里标签可见（ADR-0051 §7
     // Topographic 开档）且命中表照常注册，但消费者只有浏览族 `drill_pick`
     // （那边 Topographic 早退）——点标签文字毫无反应（用户实测）。
@@ -164,13 +167,14 @@ pub fn commit_point_select_on_click(
         // 子图继承父图栅格时 `terrain_of` 会返 None——无地形可选。
         return;
     };
-    // 双击跟踪（ADR-0089 D2）：双击 = 照常走下面的裁定（两次单击各自幂等）
-    // + 拉起属性窗体。阈值单点 [`wv_render::input`]，位移按屏幕像素口径乘
-    // `view.scale`（drill 侧 UX-024 同口径）。
+    // 双击跟踪（ADR-0089 D2；ADR-0094 追记：后果按裁定结果分流，见函数尾
+    // ——实体拉 Inspector，群系格开笔刷面板）。两次单击各自幂等。阈值单点
+    // [`wv_render::input`]，位移按屏幕像素口径乘 `view.scale`（UX-024 同口径）。
+    let mut is_double = false;
     if let Some(time) = time.as_deref() {
         let now = time.elapsed_secs_f64();
         let double_slop_world = wv_render::input::DOUBLE_CLICK_SLOP_PX * view.scale;
-        let is_double = dbl
+        is_double = dbl
             .0
             .map(|(t, p)| {
                 now - t <= wv_render::input::DOUBLE_CLICK_SECS
@@ -178,11 +182,6 @@ pub fn commit_point_select_on_click(
             })
             .unwrap_or(false);
         dbl.0 = if is_double { None } else { Some((now, cursor)) };
-        if is_double {
-            if let Some(req) = inspector_req.as_deref_mut() {
-                req.request();
-            }
-        }
     }
     // 图绑定兜底：正常每帧由 `sync_cell_region` 幂等绑定；本系统跑在渲染
     // 之前时（首帧 / 测试）也得保证写进的是当前图的位图。
@@ -250,6 +249,20 @@ pub fn commit_point_select_on_click(
                 sel.replace(cells);
                 projection.selection = None;
             }
+        }
+    }
+
+    // ── 双击后果（裁定之后分流，ADR-0089 D2 + ADR-0094 追记）──
+    // 实体选中 → Inspector（既有语义）；群系格选中 → **打开笔刷面板**：
+    // CellMap 编辑段（统一属性表单）2026-10-24 起住在笔刷窗里，且进
+    // CellMap 工作区时它默认不开——双击把编辑框带上，不让作者猜位置。
+    if is_double {
+        if projection.selection.is_some() {
+            if let Some(req) = inspector_req.as_deref_mut() {
+                req.request();
+            }
+        } else if view.mode == ViewMode::Topographic && !sel.is_empty() {
+            panels.visible.insert(crate::state::Panel::Brush, true);
         }
     }
 }
