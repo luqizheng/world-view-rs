@@ -60,57 +60,14 @@ pub mod place;
 pub mod region;
 pub mod situations;
 
-/// Inspector 的页签。**会话态**——不落 `ui-layout.yaml`
-/// （那是布局记忆，不是 UI 偏好）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum InspectorTab {
-    /// 「属性」：当前选中对象的属性表单。默认页。
-    #[default]
-    Properties,
-    /// 「势力层」：势力层的增删改 + 势力列表。
-    FactionLayers,
-    /// 「事态」：事态列表。
-    Situations,
-}
-
-impl InspectorTab {
-    /// 页签下标（供 [`wv_ui::widgets::controls::tabs`] 用）。
-    pub fn index(self) -> usize {
-        match self {
-            InspectorTab::Properties => 0,
-            InspectorTab::FactionLayers => 1,
-            InspectorTab::Situations => 2,
-        }
-    }
-
-    /// 由下标反查页签（越界时回落到默认页）。
-    pub fn from_index(i: usize) -> Self {
-        match i {
-            1 => InspectorTab::FactionLayers,
-            2 => InspectorTab::Situations,
-            _ => InspectorTab::Properties,
-        }
-    }
-}
-
 /// CellMap 工作区下势力层/事态两页签**禁用**（用户裁定：CellMap 只关注
 /// 自然，其他不管）——禁用而非隐藏，布局不跳。返回 `tabs` 的 `disabled` 切片。
-fn inspector_disabled_tabs(workspace_active: bool) -> &'static [usize] {
-    if workspace_active {
-        &[1, 2]
-    } else {
-        &[]
-    }
-}
-
-/// Inspector 的 UI 会话状态（当前页签）。
+/// Inspector 的 UI 会话状态（ADR-0095 拆窗后仅存**空壳**——页签随拆窗
+/// 退役；保留类型让既有签名/夹具零扰动，将来放窗级会话态）。
 ///
 /// 与 [`PanelState`]（可见性 / 位置）同层——都是**会话态**，不落盘。
 #[derive(Resource, Debug, Clone, Copy, Default)]
-pub struct InspectorState {
-    /// 当前页签。
-    pub tab: InspectorTab,
-}
+pub struct InspectorState {}
 
 /// 「属性」页签当前该渲染哪一型表单。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -192,7 +149,7 @@ pub fn panel_inspector(
         ResMut<WorldProjection>,
         ResMut<crate::edit::editing::EditHistory>,
     ),
-    (mut panels, mut inspector): (ResMut<PanelState>, ResMut<InspectorState>),
+    mut panels: ResMut<PanelState>,
     (view, playback, grid, mut pen_dialog): (
         Res<crate::state::ViewState>,
         Res<crate::state::PlaybackState>,
@@ -247,6 +204,12 @@ pub fn panel_inspector(
     // CellMap 工作区是否激活（在 float_window 借用 panels 之前快照）。
     let workspace_active = panels.cell_workspace_backup.is_some();
 
+    // ── ADR-0095：统一 Inspector 拆三张独立浮窗 ──
+    // 属性（Panel::Inspector）/ 势力层（Panel::Faction）/ 事态
+    // （Panel::Situation）各自可拖、可关、可开关（菜单/命令面板/HTTP 同源）；
+    // 页签条退役。势力层/事态在工作区内不渲染（页签禁用语义 → 整窗不渲染，
+    // 用户裁定「CellMap 只关注属性」）。
+
     float_window(
         ctx,
         &shell,
@@ -256,86 +219,78 @@ pub fn panel_inspector(
         None,
         current_loc.0,
         |ui| {
-            // ── 页签条 ──────────────────────────────────────────────
-            // 三页签共用**一个** egui 窗口（`float_window` 的 id 由
-            // `Panel::Inspector` 决定），故切页签 = 换 body，不是开新窗口。
-            let labels = [
-                crate::i18n::t(current_loc.0, crate::i18n::I18nKey::InspectorTabProperties),
-                crate::i18n::t(
-                    current_loc.0,
-                    crate::i18n::I18nKey::InspectorTabFactionLayers,
-                ),
-                crate::i18n::t(current_loc.0, crate::i18n::I18nKey::InspectorTabSituations),
-            ];
-            if let Some(idx) = crate::ui::widgets::tabs(
+            render_properties(
                 ui,
                 &shell,
-                "inspector_tabs",
-                &labels,
-                inspector.tab.index(),
-                inspector_disabled_tabs(workspace_active),
-            ) {
-                inspector.tab = InspectorTab::from_index(idx);
-            }
-            ui.add_space(space::SM);
-
-            // ── 页签内容 ────────────────────────────────────────────
-            match inspector.tab {
-                InspectorTab::Properties => {
-                    render_properties(
-                        ui,
-                        &shell,
-                        selected,
-                        &mut projection,
-                        &mut edit,
-                        &view,
-                        &playback,
-                        &grid,
-                        &mut edit_cell,
-                        &mut boundary,
-                        &mut display,
-                        &mut nature,
-                        &mut selection,
-                        &mut paint_session,
-                        &mut flood_select,
-                        &mut derived,
-                        &cell_sel,
-                        &mut drafts,
-                        &mut tex,
-                        &mut notice,
-                        &time,
-                        current_loc.0,
-                        &mut drill,
-                        &mut city_edit,
-                    );
-                }
-                InspectorTab::FactionLayers => {
-                    layers::layers_tab(
-                        ui,
-                        &shell,
-                        &view,
-                        &mut projection,
-                        &mut edit,
-                        &mut display,
-                        &mut inspector,
-                        &mut pen_dialog,
-                        playback.current_day,
-                        current_loc.0,
-                        &mut faction_create,
-                    );
-                }
-                InspectorTab::Situations => {
-                    situations::situations_tab(
-                        ui,
-                        &shell,
-                        &projection,
-                        &mut situation_create,
-                        &playback,
-                    );
-                }
-            }
+                selected,
+                &mut projection,
+                &mut edit,
+                &view,
+                &playback,
+                &grid,
+                &mut edit_cell,
+                &mut boundary,
+                &mut display,
+                &mut nature,
+                &mut selection,
+                &mut paint_session,
+                &mut flood_select,
+                &mut derived,
+                &cell_sel,
+                &mut drafts,
+                &mut tex,
+                &mut notice,
+                &time,
+                current_loc.0,
+                &mut drill,
+                &mut city_edit,
+            );
         },
     );
+
+    if !workspace_active {
+        float_window(
+            ctx,
+            &shell,
+            &layouts,
+            &mut panels,
+            Panel::Faction,
+            None,
+            current_loc.0,
+            |ui| {
+                layers::layers_tab(
+                    ui,
+                    &shell,
+                    &view,
+                    &mut projection,
+                    &mut edit,
+                    &mut display,
+                    &mut pen_dialog,
+                    playback.current_day,
+                    current_loc.0,
+                    &mut faction_create,
+                );
+            },
+        );
+        float_window(
+            ctx,
+            &shell,
+            &layouts,
+            &mut panels,
+            Panel::Situation,
+            None,
+            current_loc.0,
+            |ui| {
+                situations::situations_tab(
+                    ui,
+                    &shell,
+                    &projection,
+                    &mut situation_create,
+                    &playback,
+                );
+            },
+        );
+    }
 }
 
 /// 群系下拉（0–20 冻结表编号，显示中文名；数据源与 CellMap 色板同源）。
@@ -910,35 +865,6 @@ mod tests {
         // 街道段无稳定 id，无法判定存活——恒 false。
         let w = wv_core::World::default();
         assert!(!selection_alive(&w, &sel(EntityKind::StreetSegment, "s1")));
-    }
-
-    #[test]
-    fn inspector_tabs_disabled_only_in_cell_workspace() {
-        assert_eq!(
-            inspector_disabled_tabs(true),
-            &[1, 2],
-            "工作区：势力层/事态禁用"
-        );
-        assert!(
-            inspector_disabled_tabs(false).is_empty(),
-            "非工作区：全部可点"
-        );
-    }
-
-    #[test]
-    fn inspector_tab_index_roundtrips() {
-        for tab in [
-            InspectorTab::Properties,
-            InspectorTab::FactionLayers,
-            InspectorTab::Situations,
-        ] {
-            assert_eq!(InspectorTab::from_index(tab.index()), tab);
-        }
-    }
-
-    #[test]
-    fn inspector_tab_from_out_of_range_index_falls_back_to_properties() {
-        assert_eq!(InspectorTab::from_index(9), InspectorTab::Properties);
     }
 
     #[test]

@@ -49,7 +49,6 @@ pub fn panel_region(
     playback: Res<PlaybackState>,
     mut tex: ResMut<wv_render::terrain_view::TerrainTexture>,
     mut notice: ResMut<ShellNotice>,
-    mut inspector: ResMut<crate::ui::inspector::InspectorState>,
     time: Res<Time>,
     current_loc: Res<CurrentLocale>,
     grid: Res<wv_render::state::GridConfig>,
@@ -142,7 +141,6 @@ pub fn panel_region(
                     projection.selection = Some(region_selection(&r.id));
                     // 点行 = 选中 → Inspector 切回「属性」页签（承诺的
                     // 「点行即看到属性」，不用再手动切页签）。
-                    inspector.tab = crate::ui::inspector::InspectorTab::Properties;
                 }
             }
 

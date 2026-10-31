@@ -35,7 +35,6 @@ pub fn layers_tab(
     projection: &mut WorldProjection,
     edit: &mut editing::EditHistory,
     display: &mut FactionDisplay,
-    inspector: &mut super::InspectorState,
     pen_dialog: &mut crate::ui::partition_pen::PartitionPenDialog,
     playback_day: i64,
     loc: crate::i18n::Locale,
@@ -306,7 +305,6 @@ pub fn layers_tab(
                 if resp.clicked() {
                     projection.selection = Some(faction_selection(&f.id));
                     // 切回「属性」页签（同 region/faction 列表）。
-                    inspector.tab = super::InspectorTab::Properties;
                 }
                 ui.add_space(space::XS);
             }

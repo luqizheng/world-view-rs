@@ -385,7 +385,6 @@ pub fn faction_create_dialog_system(
     mut projection: ResMut<WorldProjection>,
     mut edit: ResMut<EditHistory>,
     mut panels: ResMut<crate::state::PanelState>,
-    mut inspector: ResMut<crate::ui::inspector::InspectorState>,
     mut diagnostics: ResMut<ProjectDiagnostics>,
     mut notice: ResMut<ShellNotice>,
     time: Res<Time>,
@@ -466,7 +465,6 @@ pub fn faction_create_dialog_system(
                 // 登记完直接选中它：作者接着要补的就是属性（层归属/驻府）。
                 projection.selection =
                     Some(crate::ui::faction_panel::faction_selection(&faction.id));
-                inspector.tab = crate::ui::inspector::InspectorTab::Properties;
                 notice.info(
                     format!(
                         "{}{}",

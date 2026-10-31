@@ -222,7 +222,10 @@ impl Panel {
     ///
     /// 枚举变体本身**暂留**——存量工程的 `ui-layout.yaml` 里有对应键，
     /// 删枚举会让旧文件的该项变成孤儿。
-    pub const ALL: [Panel; 12] = [
+    /// ADR-0095（2026-10-31）：统一 Inspector 拆独立浮窗——`Faction`（势力
+    /// 层）与 `Situation`（事态）**退役复辟**为第一类可开关面板；`Inspector`
+    /// 本体收窄为「属性」窗。
+    pub const ALL: [Panel; 14] = [
         Panel::MapTree,
         Panel::Layers,
         Panel::Minimap,
@@ -235,6 +238,8 @@ impl Panel {
         Panel::Inspector,
         Panel::Validation,
         Panel::LinePoi,
+        Panel::Faction,
+        Panel::Situation,
     ];
 
     /// 菜单 / 标题显示名（ADR-0018：locale-dependent 文案查表）。
@@ -246,7 +251,9 @@ impl Panel {
             Panel::Brush => t(loc, I18nKey::PanelBrush),
             Panel::Inspector => t(loc, I18nKey::PanelInspector),
             Panel::Timeline => t(loc, I18nKey::PanelTimeline),
-            Panel::Faction => t(loc, I18nKey::PanelFaction),
+            // ADR-0095：势力层窗标题沿用页签名（「势力层」比退役的
+            // 「势力编辑」更贴现职责）。
+            Panel::Faction => t(loc, I18nKey::InspectorTabFactionLayers),
             Panel::Region => t(loc, I18nKey::PanelRegion),
             Panel::Situation => t(loc, I18nKey::PanelSituation),
             Panel::Validation => t(loc, I18nKey::PanelValidation),
@@ -459,6 +466,10 @@ pub struct PanelState {
     /// 进 CellMap：快照当前全部面板 visible → 只开 Inspector（Cell 编辑唯一
     /// 相关面板）；退 CellMap（点 Browse/Edit 或再点 CellMap）：还原快照并清
     /// `None`。`None` = 不在工作区。
+    ///
+    /// 追记（2026-10-31，ADR-0095）：格子**编辑框**2026-10-24 起在笔刷窗
+    /// （CellMap 编辑段），双击群系格会自动把它带上；势力层/事态两窗在
+    /// 工作区内不渲染（页签禁用语义延续为整窗不渲染）。
     pub cell_workspace_backup: Option<Vec<(Panel, bool)>>,
 }
 

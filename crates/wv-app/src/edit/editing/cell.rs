@@ -115,8 +115,9 @@ pub fn commit_point_select_on_click(
     screen: Res<crate::app_screen::AppScreen>,
     mut link: ResMut<super::region::LassoLiveLink>,
     // 双击群系格 → 打开笔刷面板（ADR-0094 追记：格子编辑框所在，2026-10-24
-    // 自 Inspector 迁入笔刷窗）。
-    mut panels: ResMut<crate::state::PanelState>,
+    // 自 Inspector 迁入笔刷窗）。Option 口径同双击束：生产恒注册，夹具缺席
+    // 即跳过开面板。
+    mut panels: Option<ResMut<crate::state::PanelState>>,
     // 标签命中表（2026-10-31 修复）：CellMap 里标签可见（ADR-0051 §7
     // Topographic 开档）且命中表照常注册，但消费者只有浏览族 `drill_pick`
     // （那边 Topographic 早退）——点标签文字毫无反应（用户实测）。
@@ -262,7 +263,9 @@ pub fn commit_point_select_on_click(
                 req.request();
             }
         } else if view.mode == ViewMode::Topographic && !sel.is_empty() {
-            panels.visible.insert(crate::state::Panel::Brush, true);
+            if let Some(panels) = panels.as_deref_mut() {
+                panels.visible.insert(crate::state::Panel::Brush, true);
+            }
         }
     }
 }

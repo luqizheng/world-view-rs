@@ -50,7 +50,6 @@ pub fn panel_landmark(
         Res<DrillState>,
         ResMut<editing::EditHistory>,
     ),
-    mut inspector: ResMut<crate::ui::inspector::InspectorState>,
     current_loc: Res<CurrentLocale>,
 ) {
     let shell = UiShell::new(&shell_cfg);
@@ -215,7 +214,6 @@ pub fn panel_landmark(
                                 place_id.clone(),
                             ));
                             // 点行即看到属性（与区域面板同款承诺）。
-                            inspector.tab = crate::ui::inspector::InspectorTab::Properties;
                         }
                         // 删除：V1 不追问，撤销兜底（Ctrl+Z 一条命令整体回退，
                         // 含级联边）。

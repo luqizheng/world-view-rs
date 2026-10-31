@@ -222,15 +222,19 @@ mod tests {
 
     #[test]
     fn retired_panels_absent_from_all() {
-        // 2026-10-22 统一 Inspector：三个面板的内容已迁入 Inspector
-        // （CellEditor→属性页签、Faction→势力层页签、Situation→事态页签），
-        // 独立浮窗不再渲染。它们**不得**回到 `Panel::ALL`——
-        // 本表驱动用户可见的列表面（命令面板 / 设置对话框 / 布局落盘），
-        // 留在表里 = 菜单出现「点了没反应」的死项。
-        for p in [Panel::CellEditor, Panel::Faction, Panel::Situation] {
+        // 2026-10-22 统一 Inspector：CellEditor 的内容迁入 Inspector，独立
+        // 浮窗不再渲染——它**不得**回到 `Panel::ALL`（本表驱动用户可见的
+        // 列表面：命令面板 / 设置对话框 / 布局落盘，死项 = 「点了没反应」）。
+        // ADR-0095（2026-10-31）：Faction/Situation **复辟**为独立浮窗
+        // （势力层窗 / 事态窗），已在 ALL 中——见下方反向断言。
+        assert!(
+            !Panel::ALL.contains(&Panel::CellEditor),
+            "CellEditor 已停渲染，不得回到 Panel::ALL"
+        );
+        for p in [Panel::Faction, Panel::Situation] {
             assert!(
-                !Panel::ALL.contains(&p),
-                "{p:?} 已停渲染，不得回到 Panel::ALL（否则菜单出现死项）"
+                Panel::ALL.contains(&p),
+                "{p:?} 已按 ADR-0095 复辟为独立浮窗，必须在 ALL（否则菜单无法开关）"
             );
         }
     }
