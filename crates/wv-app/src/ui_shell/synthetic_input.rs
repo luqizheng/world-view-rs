@@ -3,7 +3,7 @@
 //!
 //! ## 设计
 //! - HTTP 桥（`http_integration`）把事件**入队**（[`SyntheticInputQueue`]）；
-//! - [`apply_synthetic_input`] 每帧**最多消费一个**事件：写
+//! - [`apply_synthetic_input_press`]（PreUpdate）+ [`apply_synthetic_input_cursor`]（Update）每帧**最多消费一个**事件：写
 //!   `ViewState::cursor_world`（覆盖 `track_cursor_world` 的 OS 光标换算）
 //!   并按下去——链序保证本帧晚于它跑的选择/笔触系统看到 `just_pressed`；
 //! - 一帧一事件是**双击语义的前提**：双击判定按 `just_pressed` 事件计，
@@ -28,10 +28,14 @@ pub enum SyntheticEvent {
     KeyPress(KeyCode),
 }
 
-/// 待注入队列（HTTP 桥生产，[`apply_synthetic_input`] 消费）。
+/// 待注入队列（HTTP 桥生产，两个消费系统协作）。
 #[derive(Resource, Default)]
 pub struct SyntheticInputQueue {
     pub events: VecDeque<SyntheticEvent>,
+    /// 本帧已按压事件的等待光标：按压系统（PreUpdate）写入，光标系统
+    /// （Update 链上 `track_cursor_world` 之后）消费——拆两半的原因见
+    /// [`apply_synthetic_input_press`] 文档。
+    pub pending_cursor: Option<Vec2>,
 }
 
 impl SyntheticInputQueue {
@@ -68,19 +72,27 @@ impl TryFrom<crate::http::bridge::SyntheticEventDto> for SyntheticEvent {
     }
 }
 
-/// 消费合成输入：每帧至多一个事件（见模块注释「一帧一事件」）。
+/// 按压语义注入（PreUpdate）：每帧至多消费一个事件。
 ///
-/// 排在 `track_cursor_world` **之后**、各点击/手势系统**之前**（同一条
-/// chain）——光标覆盖必须在写侧之前，按下必须在其消费侧之前。
-pub fn apply_synthetic_input(
+/// **为什么在 PreUpdate**：`just_pressed` 只在按压帧为真，下一帧被
+/// bevy_input 的清场系统抹掉。本仓库的点击消费方分散在两条互不排序的
+/// 注册链上——wv-app 的编辑链（点选/圈选/手势，排在本仓库光标系统之后，
+/// Update 内可见）与 wv-render 自注册链（`drill_pick` 等，与编辑链无
+/// 约束，帧内可能跑在注入之前 ⇒ 永远看不到）。放 PreUpdate、排在
+/// `bevy::input::InputSystems`（清场）之后，所有 Update 侧消费者无论
+/// 内部顺序一律可见——一处排序治全部。
+///
+/// 同帧还压掉 [`wv_render::camera::PointerOverUi`]（排在
+/// `poll_egui_wants_input` 之后写入）：真实 OS 光标可能悬在面板上让
+/// 「UI 让位」门吞掉合成点击；PreUpdate 覆盖管住当帧全部让位门。
+///
+/// 光标不在这里写（`track_cursor_world` 会在 Update 里用真实鼠标覆写它）——
+/// 存进 [`SyntheticInputQueue::pending_cursor`]，由 Update 链上的
+/// [`apply_synthetic_input_cursor`] 消费。
+pub fn apply_synthetic_input_press(
     mut queue: ResMut<SyntheticInputQueue>,
-    mut view: ResMut<crate::state::ViewState>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
-    // 合成点击独占指针（ADR-0096）：真实 OS 光标可能悬在面板上——那会让
-    // 一切消费方的 `ui.wants_pointer` 让位门把合成点击吞掉。本资源在
-    // PreUpdate 写入、本系统在 Update 消费——此处覆盖即管住当帧全部
-    // Update 侧让位门（点选 / 圈选 / 手势 / drill_pick 同一套门）。
     mut pointer: ResMut<wv_render::camera::PointerOverUi>,
 ) {
     let Some(ev) = queue.events.pop_front() else {
@@ -90,16 +102,29 @@ pub fn apply_synthetic_input(
     pointer.wants_pointer = false;
     match ev {
         SyntheticEvent::PointerDown { world } => {
-            view.cursor_world = Some(world);
             mouse.press(MouseButton::Left);
+            queue.pending_cursor = Some(world);
         }
         SyntheticEvent::PointerUp { world } => {
-            view.cursor_world = Some(world);
             mouse.release(MouseButton::Left);
+            queue.pending_cursor = Some(world);
         }
         SyntheticEvent::KeyPress(code) => {
             keys.press(code);
         }
+    }
+}
+
+/// 光标覆盖（Update）：消费本帧按压事件的世界坐标。
+///
+/// 必须排在 `track_cursor_world` **之后**（覆盖它）、各点击/手势系统
+/// **之前**（同一条 chain）——位置与旧单系统实现一致。
+pub fn apply_synthetic_input_cursor(
+    mut queue: ResMut<SyntheticInputQueue>,
+    mut view: ResMut<crate::state::ViewState>,
+) {
+    if let Some(world) = queue.pending_cursor.take() {
+        view.cursor_world = Some(world);
     }
 }
 
@@ -137,7 +162,9 @@ mod tests {
             },
         ]);
         let mut schedule = Schedule::default();
-        schedule.add_systems(apply_synthetic_input);
+        // 生产里两系统分处 PreUpdate/Update（帧内必此序）；裸 Schedule 无
+        // 帧界语义，显式 chain 复刻同一顺序。
+        schedule.add_systems((apply_synthetic_input_press, apply_synthetic_input_cursor).chain());
 
         schedule.run(&mut world);
         {
@@ -167,7 +194,9 @@ mod tests {
     fn key_press_injects_just_pressed() {
         let mut world = world_with_queue(vec![SyntheticEvent::KeyPress(KeyCode::Escape)]);
         let mut schedule = Schedule::default();
-        schedule.add_systems(apply_synthetic_input);
+        // 生产里两系统分处 PreUpdate/Update（帧内必此序）；裸 Schedule 无
+        // 帧界语义，显式 chain 复刻同一顺序。
+        schedule.add_systems((apply_synthetic_input_press, apply_synthetic_input_cursor).chain());
         schedule.run(&mut world);
         let keys = world.resource::<ButtonInput<KeyCode>>();
         assert!(keys.just_pressed(KeyCode::Escape), "Escape 应处于按下帧");

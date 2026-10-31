@@ -60,6 +60,16 @@ pub(super) fn register(app: &mut App) {
     // 一定先于 Update），唯一同在 PreUpdate 的消费者（`poll_open_project_dialog`）
     // 由 ui_shell 侧显式 `.before()` 保证。
     app.add_systems(PreUpdate, wv_render::theme::switch::sync_active_theme_pack);
+    // 合成输入按压（ADR-0096）：PreUpdate、`InputSystems`（bevy_input 清场）
+    // 与 `poll_egui_wants_input`（UI 让位旗标写入）之后——just_pressed 对
+    // 全部 Update 侧消费者可见（两条注册链一视同仁），UI 让位门被压掉。
+    // 光标覆盖在 Update 链（上方 `apply_synthetic_input_cursor`）。
+    app.add_systems(
+        PreUpdate,
+        crate::ui_shell::synthetic_input::apply_synthetic_input_press
+            .after(bevy::input::InputSystems)
+            .after(wv_render::camera::poll_egui_wants_input),
+    );
     app.add_systems(
         PreUpdate,
         // 必须排在 bevy_egui 建上下文之后：否则首帧 ctx_mut() 对未初始化
@@ -102,8 +112,8 @@ pub(super) fn register(app: &mut App) {
                     // 至多消费一个——必须晚于光标换算（覆盖它）、早于一切
                     // just_pressed 消费方（选择 / 笔触 / 手势）。
                     wv_render::perf_timed!(
-                        "apply_synthetic_input",
-                        crate::ui_shell::synthetic_input::apply_synthetic_input
+                        "apply_synthetic_input_cursor",
+                        crate::ui_shell::synthetic_input::apply_synthetic_input_cursor
                     ),
                     wv_render::perf_timed!("collect_brush_stroke", camera::collect_brush_stroke),
                     // 编辑（笔触 → 命令 → History）
