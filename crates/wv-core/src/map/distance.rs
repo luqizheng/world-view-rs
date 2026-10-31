@@ -181,12 +181,22 @@ pub enum PoiKind {
     Government,
     /// 商业 / 购物。
     Shop,
+    /// 遗迹（断柱 / 废墟，ADR-0093 图标轮扩展）。
+    Ruins,
+    /// 竞技场 / 比武场。
+    Arena,
+    /// 神殿 / 祭坛（幻想语义，非特定宗教）。
+    Shrine,
+    /// 传送门 / 魔法节点。
+    Portal,
+    /// 险地 / 龙巢 / 禁区。
+    Danger,
 }
 
 impl PoiKind {
     /// 全部类别（声明序）。渲染层的材质 / 批次表按 [`Self::index`] 索引，
     /// 新增类别只需在这里追加 + 给配色。
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 17] = [
         Self::Other,
         Self::Settlement,
         Self::Peak,
@@ -199,6 +209,11 @@ impl PoiKind {
         Self::Education,
         Self::Government,
         Self::Shop,
+        Self::Ruins,
+        Self::Arena,
+        Self::Shrine,
+        Self::Portal,
+        Self::Danger,
     ];
 
     /// 类别总数（= [`Self::ALL`] 长度，编译期一致）。
@@ -229,6 +244,11 @@ impl PoiKind {
             Self::Education => "education",
             Self::Government => "government",
             Self::Shop => "shop",
+            Self::Ruins => "ruins",
+            Self::Arena => "arena",
+            Self::Shrine => "shrine",
+            Self::Portal => "portal",
+            Self::Danger => "danger",
         }
     }
 }
@@ -935,7 +955,7 @@ mod tests {
             assert_eq!(yaml.trim(), k.key(), "{k:?} 的 serde 拼写与 key() 不一致");
         }
         assert_eq!(PoiKind::default(), PoiKind::Other, "缺省应为未分类");
-        assert_eq!(PoiKind::COUNT, 12);
+        assert_eq!(PoiKind::COUNT, 17);
         for (i, k) in PoiKind::ALL.iter().enumerate() {
             assert_eq!(k.index(), i, "{k:?} 的 index 应等于声明序");
         }

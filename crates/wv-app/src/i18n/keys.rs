@@ -814,6 +814,16 @@ pub enum I18nKey {
     PoiKindGovernment,
     /// POI 类别：商业
     PoiKindShop,
+    /// 类别：遗迹
+    PoiKindRuins,
+    /// 类别：竞技场
+    PoiKindArena,
+    /// 类别：神殿
+    PoiKindShrine,
+    /// 类别：传送门
+    PoiKindPortal,
+    /// 类别：险地
+    PoiKindDanger,
     /// Place 表单：重生成标记按钮
     InspectorPlaceRegenMarker,
     /// Faction 表单：在势力图定位
@@ -1653,7 +1663,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 701] = [
+    pub const ALL: [I18nKey; 706] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -2040,6 +2050,11 @@ impl I18nKey {
         I18nKey::PoiKindEducation,
         I18nKey::PoiKindGovernment,
         I18nKey::PoiKindShop,
+        I18nKey::PoiKindRuins,
+        I18nKey::PoiKindArena,
+        I18nKey::PoiKindShrine,
+        I18nKey::PoiKindPortal,
+        I18nKey::PoiKindDanger,
         I18nKey::InspectorPlaceRegenMarker,
         I18nKey::InspectorFactionFocus,
         I18nKey::InspectorFactionClearFocus,

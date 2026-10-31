@@ -60,6 +60,7 @@ pub mod faction_partition;
 pub mod feature_overlays;
 #[cfg(feature = "app")]
 mod fp;
+pub mod glyphs;
 #[cfg(feature = "app")]
 pub mod input;
 #[cfg(feature = "app")]
@@ -83,6 +84,7 @@ pub mod perf;
 #[cfg(feature = "app")]
 pub mod place_line;
 pub mod plugins;
+pub mod poi_glyphs;
 #[cfg(feature = "app")]
 pub mod recipe;
 #[cfg(feature = "app")]

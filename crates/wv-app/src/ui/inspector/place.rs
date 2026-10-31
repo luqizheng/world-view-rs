@@ -182,6 +182,11 @@ pub(crate) fn poi_kind_label_key(kind: PoiKind) -> crate::i18n::I18nKey {
         PoiKind::Education => K::PoiKindEducation,
         PoiKind::Government => K::PoiKindGovernment,
         PoiKind::Shop => K::PoiKindShop,
+        PoiKind::Ruins => K::PoiKindRuins,
+        PoiKind::Arena => K::PoiKindArena,
+        PoiKind::Shrine => K::PoiKindShrine,
+        PoiKind::Portal => K::PoiKindPortal,
+        PoiKind::Danger => K::PoiKindDanger,
     }
 }
 

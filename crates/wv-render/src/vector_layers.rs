@@ -34,8 +34,9 @@ use crate::layer_frame::LayerFrame;
 use crate::recipe::{PassId, RenderRecipe};
 use crate::state::{lod_tier, GridConfig, ViewState};
 use crate::theme::colors_google::{
-    GOOGLE_PLACE_DOT, GOOGLE_POI_EDUCATION, GOOGLE_POI_FOOD, GOOGLE_POI_GOVERNMENT,
-    GOOGLE_POI_LODGING, GOOGLE_POI_MEDICAL, GOOGLE_POI_RING, GOOGLE_POI_SCENIC, GOOGLE_POI_SHOP,
+    GOOGLE_PLACE_DOT, GOOGLE_POI_ARENA, GOOGLE_POI_DANGER, GOOGLE_POI_EDUCATION, GOOGLE_POI_FOOD,
+    GOOGLE_POI_GOVERNMENT, GOOGLE_POI_LODGING, GOOGLE_POI_MEDICAL, GOOGLE_POI_PORTAL,
+    GOOGLE_POI_RING, GOOGLE_POI_RUINS, GOOGLE_POI_SCENIC, GOOGLE_POI_SHOP, GOOGLE_POI_SHRINE,
     GOOGLE_POI_TRANSIT, GOOGLE_ROAD_CASING, GOOGLE_ROAD_FILL, GOOGLE_ROAD_GRADES,
 };
 use crate::theme::palette::{self, MapPalette, PaletteColors};
@@ -651,9 +652,10 @@ pub struct VectorLayerEntities {
     rivers: RoadLayerPool,
     /// 河流材质（惰性建一次；固定水蓝，主题化随 README §12-30 后继）。
     river_material: Option<Handle<ColorMaterial>>,
-    /// 地物符号合批（每类一个 mesh + 一个实体，共 2 个）；与 decor 同款
-    /// 「原地改写」纪律。顶点色已在 mesh 端烘好 → 配白色 ColorMaterial。
-    landmarks: [LandmarkPool; 2],
+    /// 地物符号合批（每类一个 mesh + 一个实体，共 `PoiKind::COUNT` 个）；
+    /// 与 decor 同款「原地改写」纪律。顶点色已在 mesh 端烘好 → 配白色
+    /// ColorMaterial（ADR-0093：图标钉按类别配色 + 白色含义图形）。
+    landmarks: [LandmarkPool; wv_core::distance::PoiKind::COUNT],
     /// 地物符号材质（白色，顶点色承载全部颜色；惰性建一次防资产累积）。
     landmark_material: Option<Handle<ColorMaterial>>,
     /// POI 外环合批（非城市材质，ADR-0030 D4）。
@@ -932,11 +934,9 @@ pub fn sync_vector_layers(
     // place 图层关时都不画。注意**不得**嵌进下面的 POI 门：Topographic 下
     // Poi=false，嵌进去 pin 永远画不出（首启实测 mesh_count=0 的根因）。
     let landmark_marker = landmark_marker(view.mode);
-    let landmarks_want = if view.mode == crate::state::ViewMode::Topographic {
-        layers.place.visible
-    } else {
-        layers.place.visible && recipe.enabled(PassId::FeatureOverlay)
-    };
+    // ADR-0093：图标钉**全模式**在场（用户裁定「POI 图标全部地图都要」）——
+    // 城堡/小镇插画的 FeatureOverlay 门随插画退役；只剩 place 图层门。
+    let landmarks_want = layers.place.visible;
 
     // 2026-10-22 内容矩阵：接 MODE_TABLE(Poi)——Topographic 下不画。
     if !layers.place.visible || !recipe.enabled(PassId::Poi) {
@@ -971,7 +971,6 @@ pub fn sync_vector_layers(
             &mut meshes,
             landmarks,
             &frame.landmark_dots,
-            view.mode,
             view.scale,
             crate::landmark_symbols::LANDMARK_Z + layers.place.z_offset,
             white,
@@ -1024,6 +1023,11 @@ fn poi_kind_color(kind: PoiKind) -> Color {
         Government => GOOGLE_POI_GOVERNMENT,
         Education => GOOGLE_POI_EDUCATION,
         Shop => GOOGLE_POI_SHOP,
+        Ruins => GOOGLE_POI_RUINS,
+        Arena => GOOGLE_POI_ARENA,
+        Shrine => GOOGLE_POI_SHRINE,
+        Portal => GOOGLE_POI_PORTAL,
+        Danger => GOOGLE_POI_DANGER,
         Settlement | Other => GOOGLE_PLACE_DOT,
     }
 }
@@ -1782,18 +1786,6 @@ pub(crate) fn landmark_marker(mode: crate::state::ViewMode) -> LandmarkMarker {
 ///
 /// 普通地图没有插画可用，城市的分量只能靠「符号大小 + 字级」两级承载
 /// （字级见 ADR-0065）。系数只乘在专业制图的 pin 上；CellMap 的 pin 保持
-/// 单档——数据视图要比的是格，不是城市地位。
-fn landmark_pin_scale(kind: crate::world_projection::LandmarkKind, cartographic: bool) -> f32 {
-    use crate::world_projection::LandmarkKind;
-    if !cartographic {
-        return 1.0;
-    }
-    match kind {
-        LandmarkKind::Citadel => 1.3,
-        LandmarkKind::Town => 1.0,
-    }
-}
-
 /// 专业制图的 POI pin 选点：rank ≥ 2 的地名**归地物符号层**（带尺寸档的
 /// map-pin），POI 层必须让位——否则同一座城市会叠两颗 pin（2026-10-26 实机
 /// 截图发现：城堡插画与分类 pin 同时压在城址上）。
@@ -1805,29 +1797,22 @@ fn poi_pin_owner_is_landmark(rank: u8) -> bool {
 fn sync_landmarks(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
-    landmark: &mut [LandmarkPool; 2],
+    landmark: &mut [LandmarkPool; wv_core::distance::PoiKind::COUNT],
     frame_landmarks: &[crate::world_projection::LandmarkDot],
-    mode: crate::state::ViewMode,
     view_scale: f32,
     z: f32,
     material: Handle<ColorMaterial>,
 ) {
-    use crate::world_projection::LANDMARK_KINDS;
-    let marker = landmark_marker(mode);
-    let cartographic = mode == crate::state::ViewMode::GoogleMap;
     // 尺寸口径由派发处一次算定（局部坐标 = 屏幕像素，只乘 `view_scale`）：
-    // 合批函数只拿最终的 `s`，不再自己推——否则「pin 形态 + rank 尺寸档」
-    // 两个系数会散落在两层里。
-    let base = landmark_size_tier(view_scale) * view_scale;
-    for (i, kind) in LANDMARK_KINDS.iter().copied().enumerate() {
-        let s = base * landmark_pin_scale(kind, cartographic);
+    // 合批函数只拿最终的 `s`，不再自己推。
+    let s = landmark_size_tier(view_scale) * view_scale;
+    for (i, kind) in wv_core::distance::PoiKind::ALL.iter().copied().enumerate() {
         sync_landmark_mesh_batches(
             commands,
             meshes,
             &mut landmark[i],
             frame_landmarks,
             kind,
-            marker,
             s,
             z,
             material.clone(),
@@ -1859,16 +1844,12 @@ fn landmark_size_tier(view_scale: f32) -> f32 {
 ///   非零 delta，避免只翻指纹低 1 位的意外相撞。
 fn landmark_batch_key(
     frame_landmarks: &[crate::world_projection::LandmarkDot],
-    kind: crate::world_projection::LandmarkKind,
-    pin: bool,
+    kind: wv_core::distance::PoiKind,
     s: f32,
     z: f32,
 ) -> StrokeBatchKey {
-    const PIN_TAG: u64 = 0x9E37_79B9_7F4A_7C15;
-    let fingerprint =
-        points_fingerprint_dots(frame_landmarks, kind) ^ if pin { PIN_TAG } else { 0 };
     StrokeBatchKey {
-        fingerprint,
+        fingerprint: points_fingerprint_dots(frame_landmarks, kind),
         world_thickness: s,
         z,
     }
@@ -1881,37 +1862,37 @@ fn sync_landmark_mesh_batches(
     meshes: &mut Assets<Mesh>,
     pool: &mut LandmarkPool,
     frame_landmarks: &[crate::world_projection::LandmarkDot],
-    kind: crate::world_projection::LandmarkKind,
-    marker: LandmarkMarker,
+    kind: wv_core::distance::PoiKind,
     s: f32,
     z: f32,
     material: Handle<ColorMaterial>,
 ) {
     use crate::landmark_symbols::{build_landmark_mesh, LandmarkBatch};
-    // 尺寸 `s` 由 [`sync_landmarks`] 统一算定（**屏幕像素恒定** + LOD 档微调
-    // + 专业制图的 rank 尺寸档）。符号局部坐标单位就是屏幕像素，缩放系数只
-    // 乘 `view_scale`——2026-10-23 实测教训：曾在本地坐标外再乘一档画布基准
-    // （26），符号被放大 26 倍成盖住半个大陆的墨团。
+    // 尺寸 `s` 由 [`sync_landmarks`] 统一算定（**屏幕像素恒定** + LOD 档微调）。
+    // 符号局部坐标单位就是屏幕像素，缩放系数只乘 `view_scale`——2026-10-23
+    // 实测教训：曾在本地坐标外再乘一档画布基准（26），符号被放大成墨团。
+    // ADR-0093：图标钉 = 分类色钉身（选中金）+ 白色含义图形；图形查表失败
+    // 回退白芯 pin（生成表与枚举失步时的静默兜底，V1 不阻断）。
+    let glyph = crate::glyphs::glyph_of(kind);
+    let body_color = poi_kind_color(kind);
     let mut batch = LandmarkBatch::new();
     for d in frame_landmarks {
-        if d.kind == kind {
-            if marker.is_pin() {
-                if d.selected {
-                    // 选中钉 = 金色版本（[ADR-0074] 追记三 followup，用户裁定
-                    // 「换一个颜色的 map-pin」），形状不变、白芯保留。
-                    batch.push_map_pin_tinted(d.pos, s, crate::landmark_symbols::SELECTED_PIN_BODY);
-                } else {
-                    batch.push_map_pin(d.pos, s);
-                }
+        if d.poi == kind {
+            let body = if d.selected {
+                crate::landmark_symbols::SELECTED_PIN_BODY
             } else {
-                match kind {
-                    crate::world_projection::LandmarkKind::Citadel => batch.push_citadel(d.pos, s),
-                    crate::world_projection::LandmarkKind::Town => batch.push_town(d.pos, s),
+                {
+                    let c = body_color.to_srgba();
+                    [c.red, c.green, c.blue, 1.0]
                 }
+            };
+            match glyph {
+                Some(g) => batch.push_icon_pin(g, d.pos, s, body),
+                None => batch.push_map_pin_tinted(d.pos, s, body),
             }
         }
     }
-    let key = landmark_batch_key(frame_landmarks, kind, marker.is_pin(), s, z);
+    let key = landmark_batch_key(frame_landmarks, kind, s, z);
     match pool.batch.take() {
         None => {
             let Some(mesh) = build_landmark_mesh(batch) else {
@@ -1956,11 +1937,11 @@ fn sync_landmark_mesh_batches(
 /// 与 `segments_fingerprint` 同款，但用 `LandmarkDot` 字段做内容指纹。
 fn points_fingerprint_dots(
     dots: &[crate::world_projection::LandmarkDot],
-    kind: crate::world_projection::LandmarkKind,
+    kind: wv_core::distance::PoiKind,
 ) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for d in dots {
-        if d.kind != kind {
+        if d.poi != kind {
             continue;
         }
         for v in [d.pos.x, d.pos.y] {
@@ -2002,48 +1983,32 @@ fn spawn_poi_batch(
 
 #[cfg(test)]
 mod tests {
-    /// **形态翻转必须换 key**（2026-10-25 实机验收发现）：Browse ↔
-    /// Topographic 切换翻转 pin，位置指纹与尺寸 `s` 都不变时 key 也要
-    /// 不同——否则池子复用旧形态 mesh，实机表现即「进 CellMap 还是
-    /// 城堡，缩放一下才变 pin」。
+    /// **类别必须换 key**（ADR-0093）：同位置不同 `poi` 的地标分属不同
+    /// 池子——指纹按类别过滤后（空集 vs 非空集）天然不同，钉身配色随之。
     #[test]
-    fn landmark_batch_key_changes_when_pin_flips() {
-        use crate::world_projection::{LandmarkDot, LandmarkKind};
-        let dots = vec![
-            LandmarkDot {
-                pos: Vec2::new(10.0, 20.0),
-                kind: LandmarkKind::Citadel,
-                selected: false,
-            },
-            LandmarkDot {
-                pos: Vec2::new(30.0, 40.0),
-                kind: LandmarkKind::Town,
-                selected: false,
-            },
-        ];
-        let plain = landmark_batch_key(&dots, LandmarkKind::Citadel, false, 1.0, 5.0);
-        let pin = landmark_batch_key(&dots, LandmarkKind::Citadel, true, 1.0, 5.0);
+    fn landmark_batch_key_changes_when_poi_kind_differs() {
+        use crate::world_projection::LandmarkDot;
+        let dots = vec![LandmarkDot {
+            pos: Vec2::new(10.0, 20.0),
+            poi: PoiKind::Settlement,
+            selected: false,
+        }];
+        let settlement = landmark_batch_key(&dots, PoiKind::Settlement, 1.0, 5.0);
+        let food = landmark_batch_key(&dots, PoiKind::Food, 1.0, 5.0);
         assert_ne!(
-            plain.fingerprint, pin.fingerprint,
-            "形态翻转必须改变指纹，否则切视图模式复用旧符号 mesh"
+            settlement.fingerprint, food.fingerprint,
+            "类别必须分池（钉身配色不同）"
         );
         // 位置 / 尺寸 / z 的既有纪律不回归：任一变化都换 key。
         let mut moved = dots.clone();
         moved[0].pos = Vec2::new(11.0, 20.0);
         assert_ne!(
-            plain.fingerprint,
-            landmark_batch_key(
-                &moved,
-                crate::world_projection::LandmarkKind::Citadel,
-                false,
-                1.0,
-                5.0
-            )
-            .fingerprint
+            settlement.fingerprint,
+            landmark_batch_key(&moved, PoiKind::Settlement, 1.0, 5.0).fingerprint
         );
         assert_ne!(
-            plain.world_thickness,
-            landmark_batch_key(&dots, LandmarkKind::Citadel, false, 2.0, 5.0).world_thickness
+            settlement.world_thickness,
+            landmark_batch_key(&dots, PoiKind::Settlement, 2.0, 5.0).world_thickness
         );
     }
     /// [ADR-0074 追记三 followup] selected 翻转必须改 batch key——否则金色
@@ -2053,56 +2018,22 @@ mod tests {
         use crate::world_projection::LandmarkDot;
         let mk = |selected: bool| LandmarkDot {
             pos: Vec2::new(10.0, 20.0),
-            kind: crate::world_projection::LandmarkKind::Citadel,
+            poi: PoiKind::Settlement,
             selected,
         };
         let dots_plain = vec![mk(false)];
         let dots_selected = vec![mk(true)];
-        let a = landmark_batch_key(
-            &dots_plain,
-            crate::world_projection::LandmarkKind::Citadel,
-            false,
-            1.0,
-            0.0,
-        );
-        let b = landmark_batch_key(
-            &dots_selected,
-            crate::world_projection::LandmarkKind::Citadel,
-            false,
-            1.0,
-            0.0,
-        );
+        let a = landmark_batch_key(&dots_plain, PoiKind::Settlement, 1.0, 0.0);
+        let b = landmark_batch_key(&dots_selected, PoiKind::Settlement, 1.0, 0.0);
         assert_ne!(a, b, "选中翻转应改变 batch key");
         // 位置也要参与（既有语义不回退）。
         let mut moved = dots_selected.clone();
         moved[0].pos = Vec2::new(99.0, 99.0);
         assert_ne!(
             b,
-            landmark_batch_key(
-                &moved,
-                crate::world_projection::LandmarkKind::Citadel,
-                false,
-                1.0,
-                0.0
-            ),
+            landmark_batch_key(&moved, PoiKind::Settlement, 1.0, 0.0),
             "位置变化仍须改 key"
         );
-    }
-
-    /// 空符号集（该 kind 无点）时 pin 两态的指纹仍可区分（pin=true 的
-    /// 空集不该命中 pin=false 的空集 mesh——虽然都是空几何不落 mesh，
-    /// key 语义上必须分开）。
-    #[test]
-    fn landmark_batch_key_pin_tag_survives_empty_set() {
-        use crate::world_projection::{LandmarkDot, LandmarkKind};
-        let dots = vec![LandmarkDot {
-            pos: Vec2::new(1.0, 1.0),
-            kind: LandmarkKind::Town,
-            selected: false,
-        }];
-        let a = landmark_batch_key(&dots, LandmarkKind::Citadel, false, 1.0, 0.0);
-        let b = landmark_batch_key(&dots, LandmarkKind::Citadel, true, 1.0, 0.0);
-        assert_ne!(a.fingerprint, b.fingerprint);
     }
 
     /// 画法分流（2026-10-26 追记三）：数据视图与普通地图都是 pin，艺术主题
@@ -2120,23 +2051,6 @@ mod tests {
             landmark_marker(ViewMode::VectorFlat),
             LandmarkMarker::Illustration
         );
-    }
-
-    /// rank 尺寸档只作用于专业制图：国都 pin 比市镇大，CellMap 单档。
-    #[test]
-    fn citadel_pin_is_larger_only_in_cartography() {
-        use crate::world_projection::LandmarkKind;
-        let cit = landmark_pin_scale(LandmarkKind::Citadel, true);
-        let town = landmark_pin_scale(LandmarkKind::Town, true);
-        assert!(
-            cit > town,
-            "国都 pin 应大于市镇 pin，实得 citadel={cit} town={town}"
-        );
-        assert!(
-            (landmark_pin_scale(LandmarkKind::Citadel, false) - 1.0).abs() < f32::EPSILON,
-            "非专业制图不套 rank 档"
-        );
-        assert!((landmark_pin_scale(LandmarkKind::Town, false) - 1.0).abs() < f32::EPSILON);
     }
 
     /// POI 让位规则：rank ≥ 2 归地物符号层。Region 档恰好只放行 rank ≥ 2，
@@ -2549,7 +2463,8 @@ mod tests {
     fn poi_kind_colors_are_distinct_for_classified_categories() {
         use PoiKind::*;
         let classified = [
-            Food, Lodging, Medical, Scenic, Station, Government, Education, Shop,
+            Food, Lodging, Medical, Scenic, Station, Government, Education, Shop, Ruins, Arena,
+            Shrine, Portal, Danger,
         ];
         let mut seen: Vec<Color> = Vec::new();
         for k in classified {
@@ -2809,7 +2724,7 @@ mod tests {
             .landmark_dots
             .push(crate::world_projection::LandmarkDot {
                 pos: Vec2::new(30.0, 30.0),
-                kind: crate::world_projection::LandmarkKind::Citadel,
+                poi: PoiKind::Settlement,
                 selected: false,
             });
         world.insert_resource(frame);
@@ -3267,14 +3182,15 @@ mod tests {
         world
     }
 
-    /// Citadel 桶（`landmarks[0]`）当前 mesh 的世界高度（顶点 y 的最大值）。
+    /// Settlement 桶（`landmarks[Settlement.index()]`）mesh 的世界顶高。
     fn landmark_mesh_top_y(world: &World) -> f32 {
-        let handle = world.resource::<VectorLayerEntities>().landmarks[0]
-            .batch
-            .as_ref()
-            .expect("符号合批应已生成")
-            .mesh
-            .clone();
+        let handle = world.resource::<VectorLayerEntities>().landmarks
+            [wv_core::distance::PoiKind::Settlement.index()]
+        .batch
+        .as_ref()
+        .expect("符号合批应已生成")
+        .mesh
+        .clone();
         let mesh = world
             .resource::<Assets<Mesh>>()
             .get(&handle)
@@ -3293,7 +3209,7 @@ mod tests {
         // 锚点贴 y=0：符号向上生长（y+），顶点最大 y = 局部高 × s，不含锚点偏移。
         let mut world = world_with_landmarks(vec![crate::world_projection::LandmarkDot {
             pos: Vec2::ZERO,
-            kind: crate::world_projection::LandmarkKind::Citadel,
+            poi: PoiKind::Settlement,
             selected: false,
         }]);
         let mut schedule = Schedule::default();

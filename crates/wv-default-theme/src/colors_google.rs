@@ -273,6 +273,16 @@ pub const GOOGLE_POI_GOVERNMENT: Color = hex(0x00796B);
 pub const GOOGLE_POI_EDUCATION: Color = hex(0x3949AB);
 /// 商业 / 购物。
 pub const GOOGLE_POI_SHOP: Color = hex(0xC2185B);
+/// 遗迹（ADR-0093 图标轮）：石灰褐。
+pub const GOOGLE_POI_RUINS: Color = hex(0x8D6E63);
+/// 竞技场（ADR-0093）：青。
+pub const GOOGLE_POI_ARENA: Color = hex(0x0097A7);
+/// 神殿（ADR-0093）：蓝灰。
+pub const GOOGLE_POI_SHRINE: Color = hex(0x455A64);
+/// 传送门（ADR-0093）：浅紫。
+pub const GOOGLE_POI_PORTAL: Color = hex(0x7E57C2);
+/// 险地（ADR-0093）：暗红。
+pub const GOOGLE_POI_DANGER: Color = hex(0x8B0000);
 
 /// 兼容旧调用的淡化目标色；Google 模式实际会忽略淡化开关，避免洗掉水色。
 pub const GOOGLE_SOFTEN_TOWARD: Color = hex(0xF7F5F0);

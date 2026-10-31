@@ -1,29 +1,21 @@
 //! 地物符号（Landmark symbols）——世界地图上的地点标记。
 //!
-//! ## 职责（2026-10-23 三轮裁定，2026-10-26 追记）
-//! 按**模式分流**（`vector_layers::landmark_marker`）：
-//! - **CellMap（Topographic）**：`push_map_pin`——经典 map-pin（圆头 + 尖尾 +
-//!   白芯，Lucide `map-pin` 实心化），数据视图的地点标记；
-//! - **专业制图（Map / GoogleMap）**：同为 map-pin，但按 rank 分尺寸档
-//!   （国都比市镇大）——普通地图不画插画，城市分量由「符号 + 字级」承载；
-//! - **其余模式（Browse 等）**：`push_citadel` / `push_town`——城堡/小镇
-//!   程序化插画，照旧。
+//! ## 职责（ADR-0093 图标钉轮，2026-10-31 用户裁定）
+//! **全模式统一「图标钉」**：彩色钉身（按 [`wv_core::distance::PoiKind`]
+//! 分类配色，选中 = 金）+ 钉头内的**白色含义图形**（`poi_glyphs` 生成数据，
+//! Lucide 直取 + AI 生成补缺）。城堡/小镇程序化插画（Citadel/Town）随本轮
+//! 退役——「加新语义 = 加一个 PoiKind 变体 + 一个 SVG 源」。
 //!
 //! ## 渲染口径
 //! - **顶点色 mesh 单批**：Bevy `Mesh2d` 支持 `ATTRIBUTE_COLOR`，配白色
-//!   `ColorMaterial` 即顶点色渲染——全部符号合一个 mesh + 一个实体，
-//!   与地形装饰（ADR-0031 D4）同款「原地改写」纪律。
-//! - 符号尺寸 = 屏幕像素 × `view.scale`（缩放时整组换 mesh，与 decor 的
-//!   `size_q` 同口径）。**局部坐标单位就是屏幕像素**（符号高约 22–24），
-//!   缩放系数只传 `view_scale`——多乘一档画布基准会把符号放大 26 倍
-//!   （2026-10-23 实测教训：Browse 出现盖住半个大陆的巨型墨团）。
+//!   `ColorMaterial` 即顶点色渲染——每类一个 mesh + 一个实体。
+//! - 符号尺寸 = 屏幕像素 × `view.scale`。**局部坐标单位就是屏幕像素**
+//!   （符号高约 22.5），多乘画布基准会把符号放大 26 倍（2026-10-23 教训）。
+//! - 含义图形 = 折线描边（相邻点对 → 垂直偏移四边形），白色画在钉身之上。
 //!
 //! ## 边界（不做什么）
-//! - **不动 POI 圆点路径**：rank < 2 的普通地点（路网交点、村庄）仍是
-//!   圆点 + 外环（`sync_poi`）——编辑态需要精确点选，圆点是工具语义。
-//! - **不做主题化**：常量色（同 decor 的 ink 常量先例），主题演绎规则
-//!   随 README §12-30（ThemePack M3）后继。
-//! - **不做选中态**：选中高亮走既有 POI/Inspector 路径，符号层只管「画」。
+//! - **不动 POI 圆点路径**：rank < 2 的普通地点仍是圆点 + 外环（工具语义）。
+//! - **不做选中环**：选中 = 钉身染金（换色优先于环，用户裁定）。
 
 /// 选中钉的针体色（金 = 本仓库「选中」语义色；白芯不变）。
 pub const SELECTED_PIN_BODY: [f32; 4] = [1.0, 0.78, 0.18, 1.0];
@@ -69,14 +61,6 @@ impl LandmarkBatch {
         self.indices.extend([base, base + 1, base + 2]);
     }
 
-    /// 追加一个轴对齐矩形（左下 + 尺寸，局部坐标）。
-    #[allow(clippy::too_many_arguments)]
-    fn quad(&mut self, x: f32, y: f32, w: f32, h: f32, rgba: [f32; 4], o: Vec2, s: f32) {
-        let (x0, y0, x1, y1) = (x, y, x + w, y + h);
-        self.tri([x0, y0], [x1, y0], [x1, y1], rgba, o, s);
-        self.tri([x0, y0], [x1, y1], [x0, y1], rgba, o, s);
-    }
-
     /// 实心圆（扇形三角逼近，`seg` 段）。
     #[allow(clippy::too_many_arguments)]
     fn circle(&mut self, cx: f32, cy: f32, r: f32, seg: usize, rgba: [f32; 4], o: Vec2, s: f32) {
@@ -98,15 +82,15 @@ impl LandmarkBatch {
     /// 经典 map-pin（Lucide `map-pin` 的实心化）：圆头 + 尖尾 + 白芯。
     ///
     /// 局部坐标：原点 = 锚点（Place 的 x/y）= pin 底尖，符号向上生长（y+）。
-    /// 两种 `LandmarkKind` 共用同一形状——等级语义由标签层承担，符号层不画。
+    /// 全类别共用同一钉形——类别语义由配色与含义图形承担（ADR-0093）。
     pub fn push_map_pin(&mut self, o: Vec2, s: f32) {
         self.push_map_pin_tinted(o, s, [0.16, 0.18, 0.22, 1.0]);
     }
 
     /// 同 [`Self::push_map_pin`]，但针体颜色由调用方给（白芯不变）。
     ///
-    /// 专业制图的分类 POI 用它：**同一 pin 形状**、按类别换针体色（ADR-0064
-    /// 追记：先统一形状，后续再补各类图标）。
+    /// rank < 2 的分类点标兜底用；rank ≥ 2 的图标钉走
+    /// [`Self::push_icon_pin`]（含义图形替代白芯）。
     pub fn push_map_pin_tinted(&mut self, o: Vec2, s: f32, body: [f32; 4]) {
         let hole = [1.0, 1.0, 1.0, 1.0]; // 白芯（map-pin 内圆）
                                          // 尾：圆底两侧收到底尖（上边 y=11 藏进头圆内，衔接无接缝）。
@@ -116,52 +100,70 @@ impl LandmarkBatch {
         self.circle(0.0, 15.0, 3.0, 16, hole, o, s);
     }
 
-    /// Citadel（rank 3）：石墙 + 双塔 + 红旗 + 底部投影。
+    /// **图标钉**（ADR-0093）：钉身（分类色 / 选中金）+ 钉头内白色含义图形。
     ///
-    /// 局部坐标：原点 = 锚点（Place 的 x/y），符号向上生长（y+），
-    /// 投影向右下（ART_STYLE_SPEC §1.5：左上光、右下投影 0.5× 高）。
-    pub fn push_citadel(&mut self, o: Vec2, s: f32) {
-        let stone = [0.72, 0.68, 0.62, 1.0]; // 墙体石灰
-        let stone_dark = [0.55, 0.51, 0.46, 1.0]; // 背光面
-        let roof = [0.62, 0.28, 0.22, 1.0]; // 塔顶赭红
-        let flag = [0.80, 0.20, 0.16, 1.0]; // 旗红
-        let shadow = [0.25, 0.22, 0.18, 0.30]; // 投影（半透明）
-
-        // 底部投影：右下偏移的扁矩形（宽 14 高 4）。
-        self.quad(1.0, -2.0, 14.0, 3.5, shadow, o, s);
-        // 主体城墙：宽 13 高 8，底边落在 y=0。
-        self.quad(-6.5, 0.0, 13.0, 8.0, stone, o, s);
-        // 城墙垛口（三个小方齿，墙顶）。
-        for cx in [-6.5, -1.5, 3.5] {
-            self.quad(cx, 8.0, 3.0, 2.0, stone, o, s);
-        }
-        // 左塔（高 14）+ 背光右壁 + 锥顶。
-        self.quad(-8.0, 0.0, 4.5, 14.0, stone, o, s);
-        self.quad(2.2, 0.0, 2.3, 14.0, stone_dark, o, s); // 右塔身合并在 x 2.2..4.5
-        self.tri([-8.2, 14.0], [-3.3, 14.0], [-5.75, 19.0], roof, o, s);
-        // 右塔（高 12）+ 锥顶。
-        self.quad(3.5, 0.0, 4.5, 12.0, stone, o, s);
-        self.tri([3.3, 12.0], [8.2, 12.0], [5.75, 17.0], roof, o, s);
-        // 旗杆 + 三角旗（左塔顶）。
-        self.quad(-6.0, 19.0, 0.8, 5.0, stone_dark, o, s);
-        self.tri([-5.2, 24.0], [-0.6, 23.0], [-5.2, 21.5], flag, o, s);
+    /// 图形替代白芯位：折线描边画在头圆之上（同 mesh 内索引序靠后 = 顶层）。
+    pub fn push_icon_pin(
+        &mut self,
+        glyph: &crate::poi_glyphs::GlyphData,
+        o: Vec2,
+        s: f32,
+        body: [f32; 4],
+    ) {
+        self.tri([-5.6, 11.0], [5.6, 11.0], [0.0, 0.0], body, o, s);
+        self.circle(0.0, 15.0, 7.5, 24, body, o, s);
+        self.push_glyph(glyph, o, s, [1.0, 1.0, 1.0, 1.0]);
     }
 
-    /// Town（rank 2）：两间错落小屋 + 投影。
-    pub fn push_town(&mut self, o: Vec2, s: f32) {
-        let wall = [0.85, 0.78, 0.66, 1.0]; // 暖墙
-        let wall_dark = [0.68, 0.60, 0.50, 1.0]; // 背光墙
-        let roof = [0.58, 0.33, 0.20, 1.0]; // 深褐顶
-        let shadow = [0.25, 0.22, 0.18, 0.30];
+    /// 白色含义图形：24 空间折线 → 钉头居中描边。
+    ///
+    /// 图形盒映射到 11px（头圆直径 15 − 4px 边距），笔画宽 = 2px（图形空间）
+    /// × k ≈ 0.92px × s；圆角线帽在 11px 尺度下不可辨，取方帽（实现最简）。
+    pub fn push_glyph(
+        &mut self,
+        glyph: &crate::poi_glyphs::GlyphData,
+        o: Vec2,
+        s: f32,
+        rgba: [f32; 4],
+    ) {
+        const GLYPH_BOX: f32 = 11.0;
+        let k = GLYPH_BOX / 24.0;
+        let center = o + Vec2::new(0.0, 15.0 * s);
+        let half_w = k * s * 0.5;
+        let mid = Vec2::new(12.0, 12.0);
+        for sub in glyph.subpaths {
+            for pair in sub.windows(2) {
+                let a = center + (Vec2::new(pair[0].0, pair[0].1) - mid) * k * s;
+                let b = center + (Vec2::new(pair[1].0, pair[1].1) - mid) * k * s;
+                self.stroke_seg(a, b, half_w, rgba);
+            }
+        }
+    }
 
-        // 投影。
-        self.quad(0.5, -1.5, 10.0, 2.8, shadow, o, s);
-        // 主屋（左，大）：墙 + 人字顶。
-        self.quad(-6.0, 0.0, 7.5, 5.5, wall, o, s);
-        self.tri([-6.8, 5.5], [1.5, 5.5], [-2.65, 9.5], roof, o, s);
-        // 副屋（右，小、后错）：墙 + 顶。
-        self.quad(1.8, 0.0, 5.0, 4.0, wall_dark, o, s);
-        self.tri([1.2, 4.0], [7.4, 4.0], [4.3, 7.2], roof, o, s);
+    /// 单段描边：垂直偏移成四边形（两三角形）。零长度段忽略。
+    fn stroke_seg(&mut self, p0: Vec2, p1: Vec2, half_w: f32, rgba: [f32; 4]) {
+        let dir = p1 - p0;
+        let len = dir.length();
+        if len < 1e-6 {
+            return;
+        }
+        let n = Vec2::new(-dir.y / len, dir.x / len) * half_w;
+        self.tri(
+            (p0 - n).to_array(),
+            (p1 - n).to_array(),
+            (p1 + n).to_array(),
+            rgba,
+            Vec2::ZERO,
+            1.0,
+        );
+        self.tri(
+            (p0 - n).to_array(),
+            (p1 + n).to_array(),
+            (p0 + n).to_array(),
+            rgba,
+            Vec2::ZERO,
+            1.0,
+        );
     }
 }
 
@@ -203,24 +205,49 @@ pub fn build_landmark_mesh(b: LandmarkBatch) -> Option<Mesh> {
 mod tests {
     use super::*;
 
-    /// 三种符号都产出非空几何，且顶点色通道与位置等长、索引不越界。
+    /// 图标钉产出非空几何：钉身（分类色）+ 白色含义图形，索引合法。
     #[test]
-    fn landmark_batches_produce_colored_geometry() {
-        let mut pin = LandmarkBatch::new();
-        pin.push_map_pin(Vec2::ZERO, 1.0);
-        let mut cit = LandmarkBatch::new();
-        cit.push_citadel(Vec2::ZERO, 1.0);
-        let mut town = LandmarkBatch::new();
-        town.push_town(Vec2::ZERO, 1.0);
-        for (name, b) in [("pin", pin), ("citadel", cit), ("town", town)] {
-            assert!(!b.is_empty(), "{name} 应有几何");
-            assert_eq!(b.verts.len(), b.colors.len(), "{name} 顶点色应与位置等长");
-            assert!(
-                b.indices.len().is_multiple_of(3),
-                "{name} 索引必须是三角形倍数"
-            );
-            assert!(b.indices.iter().all(|&i| (i as usize) < b.verts.len()));
+    fn icon_pin_produces_body_and_white_glyph() {
+        let glyph = crate::poi_glyphs::glyph("castle").expect("castle 图形应在生成表中");
+        let mut b = LandmarkBatch::new();
+        b.push_icon_pin(glyph, Vec2::ZERO, 1.0, [0.2, 0.4, 0.8, 1.0]);
+        assert!(!b.is_empty(), "图标钉应有几何");
+        assert_eq!(b.verts.len(), b.colors.len());
+        assert!(b.indices.iter().all(|&i| (i as usize) < b.verts.len()));
+        // 钉身蓝色与图形白色都在场。
+        assert!(
+            b.colors.iter().any(|c| c[2] > 0.7 && c[0] < 0.4),
+            "钉身应为给定蓝"
+        );
+        assert!(
+            b.colors
+                .iter()
+                .any(|c| c[0] == 1.0 && c[1] == 1.0 && c[2] == 1.0),
+            "含义图形必须为白色"
+        );
+    }
+
+    /// 全部 17 类都有图形（PoiKind → glyph 映射完备性，ADR-0093）。
+    #[test]
+    fn every_poi_kind_has_a_glyph() {
+        for kind in wv_core::distance::PoiKind::ALL {
+            let g = crate::glyphs::glyph_of(kind);
+            assert!(g.is_some(), "{kind:?} 缺含义图形");
+            assert!(!g.unwrap().subpaths.is_empty(), "{kind:?} 图形为空");
         }
+    }
+
+    /// 图形画在钉头内：顶点落在头圆（圆心 (0,15) r≈7）附近而非钉尾。
+    #[test]
+    fn glyph_stays_inside_pin_head() {
+        let glyph = crate::poi_glyphs::glyph("anchor").expect("anchor 图形应在生成表中");
+        let mut b = LandmarkBatch::new();
+        b.push_glyph(glyph, Vec2::ZERO, 1.0, [1.0, 1.0, 1.0, 1.0]);
+        let ys: Vec<f32> = b.verts.iter().map(|v| v[1]).collect();
+        let top = ys.iter().copied().fold(f32::MIN, f32::max);
+        let bottom = ys.iter().copied().fold(f32::MAX, f32::min);
+        assert!(top <= 15.0 + 6.0, "图形顶应落在头圆内，得 {top}");
+        assert!(bottom >= 15.0 - 6.0, "图形底应落在头圆内，得 {bottom}");
     }
 
     /// 空 batch 不产 mesh（空 mesh 禁律）。

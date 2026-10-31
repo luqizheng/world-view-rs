@@ -310,20 +310,15 @@ pub(crate) fn build_road_tier_view(
     (segments, cuts, fingerprints)
 }
 
-/// 一个地物符号的渲染数据。`kind` 决定 `sync_landmarks` 烘哪个顶点流。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LandmarkKind {
-    Citadel,
-    Town,
-}
-
-/// `LandmarkKind` 稳定数组（合批键 / 遍历用）。
-pub const LANDMARK_KINDS: [LandmarkKind; 2] = [LandmarkKind::Citadel, LandmarkKind::Town];
-
+/// 一个地物符号的渲染数据。`poi` 决定 `sync_landmarks` 烘哪个顶点流
+/// （ADR-0093：钉身按 [`PoiKind`] 分类配色 + 白色含义图形，全模式统一
+/// 图标钉——城堡/小镇插画随本字段替换退役）。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LandmarkDot {
     pub pos: Vec2,
-    pub kind: LandmarkKind,
+    /// POI 分类（ADR-0064）。缺省折算 = 聚落——进本结构的地标都是
+    /// rank≥2 的聚落语义（`place_dot_for` 的城市符号口径）。
+    pub poi: wv_core::distance::PoiKind,
     /// 选中态（[ADR-0074] 追记三 followup）：绘制侧把钉染金（换色优先于环）。
     pub selected: bool,
 }
@@ -690,14 +685,11 @@ pub fn compute_projection(
                                         .unwrap_or_else(|| grid.map_to_view(Vec2::new(x, y)));
                                     if (pos.x - cx).abs() <= half.x && (pos.y - cy).abs() <= half.y
                                     {
-                                        let kind = if rank >= 3 {
-                                            LandmarkKind::Citadel
-                                        } else {
-                                            LandmarkKind::Town
-                                        };
                                         frame.landmark_dots.push(LandmarkDot {
                                             pos,
-                                            kind,
+                                            poi: p
+                                                .kind
+                                                .unwrap_or(wv_core::distance::PoiKind::Settlement),
                                             selected: sel_place == Some(&p.id),
                                         });
                                     }

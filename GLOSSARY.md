@@ -62,6 +62,8 @@
 | **图标锚点** | Icon Anchor | `IconSpec.anchor`：本图 `extent` 内的**归一化** `[0,1]²` 位置（左上原点、y 向下）。归一化使父图 `extent` 缩放时锚点不失效；缺省时渲染层按 `id` 哈希确定性摆位；越界值夹回 `[0,1]`，数据层不拒收 | 地理 |
 | **钻入入口** | Drill Entry | 带 `drill_into` 的图标 = 双击进入该子图的入口；`None` = 纯注释标记，只画不可点。悬空引用由 `diagnose` 报 Error 级诊断但不阻止加载 | 地理 |
 | **图标形状** | IconShape | 五种形状（菱形 / 圆形 / 十字 / 方形 / 四角星），缺省菱形（v0.2 §B.2 的钻入标记形状） | 地理 |
+| **图标钉** | Icon Pin | ADR-0093：rank≥2 地点在**全视图模式**的统一符号形态——彩色钉身（`PoiKind` 分类配色，选中 = 金）+ 钉头内**白色含义图形**。城堡/小镇插画（Citadel/Town）随本术语退役 | 地理 |
+| **含义图形** | Glyph | 图标钉钉头内的白色折线图形，语义锚 = `PoiKind`。源 = `crates/wv-ui/assets/ui/poi_glyphs/*.svg`（Lucide 直取 + AI 生成补缺），经 `scripts/normalize_poi_glyphs.py` 归一化（24×24、y 向上、适配 20×20、线稿化）生成 `wv-render::poi_glyphs` 折线常量——加新语义 = 加枚举变体 + 配色 + SVG 源 + 重跑生成器 | 美术 |
 | **显式颜色优先** | Explicit Color Wins | `IconSpec.color`（`#RRGGBB`，`wv-core::color::Color`）声明后**优先于主题色**——不再因「已访问」转灰 | 地理 |
 | **地形网格** | TerrainGrid | `wv-terrain` 的核心数据结构，承载高度场与地形类型 | 地理 |
 | **矢量图层** | Vector Layer | 地图叠加层：地点标记、道路、边界、势力几何、事件点、文字标注。类比百度地图的「普通（矢量）地图」，与地形栅格图层分离、可独立开关（P5） | 地理 |
