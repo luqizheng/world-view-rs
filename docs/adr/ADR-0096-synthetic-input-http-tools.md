@@ -32,3 +32,11 @@
 - **Bevy 后台挂起无帧**：窗口最小化时合成事件积压不消费（同截图限制），文档已述；
 - **词表维护**：MapToolId 新变体需同步 `parse_map_tool`（穷尽匹配在编译期逼不出本表——注释已注明）；
 - **每帧一事件的时序耦合**：若未来把消费系统挪出主 chain（改并发），双击语义会碎——链序契约已写进模块文档。
+
+## 5. 追记（2026-10-31 同日）：验收脚本暴露的三个工具面缺口，已补
+
+实战跑「建图 → 布点 → 钻入 → 改」全流程时撞出的缺口与处置：
+
+1. **合成按压对跨注册链消费方永远不可见**——`drill_pick` 注册在 wv-render 自注册链，与 wv-app 编辑链无排序约束，帧内可能跑在注入之前，`just_pressed` 下帧即被清场。**修**：按压注入拆到 PreUpdate（`.after(InputSystems)` + `.after(poll_egui_wants_input)`），光标覆盖留在 Update 链原槽位（commit `1053d41`）。
+2. **切图 / 缩放没有工具面**——原先只能靠 `WV_DRILL` / `WV_SCALE` 启动探针「开机即在」。**补**：`set_current_map`（`DrillState::drill_to`，并立即同步 `ViewState.current_map` 让回执即真）、`set_zoom`（一次写 `ViewState.scale` + 相机正交尺寸，负值/非有限值报 INVALID；快照新增 `scale` 字段）。
+3. **`create_place` 建不出「城市符号」**——原先无法指定类别与级别，建出来只能是裸点标。**补**：`kind`（`PoiKind` 词表，非法值显式报错并列词表）、`rank`（0..=3，≥2 走图标钉）。工具面 17 → 19。

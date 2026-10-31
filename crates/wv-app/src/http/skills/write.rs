@@ -98,7 +98,17 @@ pub fn create_place_schema() -> Value {
             "x": {"type": "number", "description": "中心点 X（地图局部坐标）"},
             "y": {"type": "number", "description": "中心点 Y（地图局部坐标）"},
             "w": {"type": "number", "description": "范围宽度（与 h 成对）"},
-            "h": {"type": "number", "description": "范围高度（与 w 成对）"}
+            "h": {"type": "number", "description": "范围高度（与 w 成对）"},
+            "kind": {
+                "type": "string",
+                "description": "POI 类别（ADR-0064；地图上画成彩色图标钉）：settlement / peak / port / station / scenic / food / lodging / medical / education / government / shop / ruins / arena / shrine / portal / danger / other"
+            },
+            "rank": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 3,
+                "description": "呈现级别（ADR-0047）：3=国家级 / 2=区域市镇级 / 1=局部 / 0=微点；rank≥2 全档可见且画图标钉。缺省按 w/h 折算（有 w/h → 城市符号）"
+            }
         },
         "required": ["id", "name"],
         "additionalProperties": false
@@ -148,6 +158,12 @@ struct CreatePlaceInput {
     w: Option<f32>,
     #[serde(default)]
     h: Option<f32>,
+    /// POI 类别（词表 = `PoiKind::key()`；非法值报 INVALID_PARAMS）。
+    #[serde(default)]
+    kind: Option<String>,
+    /// 呈现级别（0..=3）；缺省按 w/h 折算。
+    #[serde(default)]
+    rank: Option<u8>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -233,8 +249,41 @@ pub async fn dispatch_write(
                     "w / h 必须同时出现或同时省略（点 vs 矩形的二元语义）",
                 ));
             }
+            // POI 类别词表（ADR-0064）：非法值显式报错——静默回退会让作者
+            // 以为写对了（工具面是 AI 的输入面，拼错必须可见）。
+            let kind = match input.kind.as_deref() {
+                None => None,
+                Some(raw) => {
+                    let norm = raw.trim().to_ascii_lowercase();
+                    match wv_core::distance::PoiKind::ALL
+                        .iter()
+                        .copied()
+                        .find(|k| k.key() == norm)
+                    {
+                        Some(k) => Some(k),
+                        None => {
+                            return Err(JsonRpcError::invalid_params(format!(
+                                "kind 非法：`{raw}`；词表：{}",
+                                wv_core::distance::PoiKind::ALL
+                                    .iter()
+                                    .map(|k| k.key())
+                                    .collect::<Vec<_>>()
+                                    .join(" / ")
+                            )))
+                        }
+                    }
+                }
+            };
+            // 呈现级别上限 3（ADR-0047 词表：0..=3）。
+            if let Some(rank) = input.rank {
+                if rank > 3 {
+                    return Err(JsonRpcError::invalid_params(format!(
+                        "rank 越界：{rank}（合法 0..=3）"
+                    )));
+                }
+            }
             let place = wv_core::distance::Place {
-                kind: None,
+                kind,
                 id,
                 name: input.name.clone(),
                 map,
@@ -245,7 +294,7 @@ pub async fn dispatch_write(
                 feature: None,
                 biome: None,
                 envelope: None,
-                rank: None,
+                rank: input.rank,
                 line: None,
                 line_kind: None,
                 line_width_m: None,

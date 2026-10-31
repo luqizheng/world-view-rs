@@ -709,6 +709,8 @@ mod skill_tests {
             "set_panel_visible",
             "enqueue_ui_input",
             "set_map_tool",
+            "set_current_map",
+            "set_zoom",
             "screenshot",
         ] {
             assert!(

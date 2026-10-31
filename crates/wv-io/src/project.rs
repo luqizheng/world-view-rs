@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use wv_core::time::TimePoint;
 use wv_core::{BuildingLayer, LabelLayerConfig, MeasurementOverlay, StreetLayer, World, WorldMeta};
 
-use crate::diagnostics::{derive_hints, Diagnostics};
+use crate::diagnostics::{derive_hints, Diagnostic, Diagnostics};
 use crate::error::{IoError, IoResult};
 
 /// 把 `Vec<T>` 写到一个目录下：每个实体一个 `<id>.yaml`。
@@ -94,7 +94,13 @@ fn save_maps(dir: &Path, maps: &[wv_core::map::MapNode]) -> IoResult<()> {
         maps.iter().map(|m| m.id.as_str().to_owned()).collect();
     if !maps.is_empty() {
         std::fs::create_dir_all(dir)?;
+        // 同 id 只写一份（先出现的胜，与 `load_maps` 的保留语义一致）——
+        // 否则后一份会把前一份覆盖在同名路径上，静默丢编辑。
+        let mut written: std::collections::HashSet<String> = std::collections::HashSet::new();
         for m in maps {
+            if !written.insert(m.id.as_str().to_owned()) {
+                continue;
+            }
             let map_dir = dir.join(m.id.as_str());
             std::fs::create_dir_all(&map_dir)?;
             let path = map_dir.join("index.yaml");
@@ -485,6 +491,16 @@ fn load_maps(root: &Path) -> IoResult<Vec<wv_core::map::MapNode>> {
         .filter(|p| p.join("index.yaml").is_file())
         .collect();
     entries.sort();
+    // 同 id 双份（历史遗留 / 作者复制目录）：保留**先加载**的一份、丢弃后面
+    // 的重复项。理由两条：
+    // 1. 既有语义——全仓一切「按 id 找图」都是 `find(|m| m.id == …)`，命中的
+    //    永远是先加载的那份；保留它才让内存与磁盘的读法一致；
+    // 2. 防覆盖——`save_maps` 按 id 定落盘路径（`maps/<id>/index.yaml`），
+    //    两份同 id 会写到同一文件、**后写覆盖前写**（实测事故 2026-10-31：
+    //    `create_map` 把新图回填进第一份的 `children`，存盘被第二份抹掉，
+    //    新图保存后变孤儿）。
+    // 磁盘上的重复本身由 `diagnose` 的重复 id 诊断提示（V1：只提示不阻止）。
+    let mut seen: std::collections::HashSet<wv_core::Id> = std::collections::HashSet::new();
     for dir in entries {
         let idx = dir.join("index.yaml");
         let text = std::fs::read_to_string(&idx)?;
@@ -493,9 +509,68 @@ fn load_maps(root: &Path) -> IoResult<Vec<wv_core::map::MapNode>> {
                 path: idx.display().to_string(),
                 source,
             })?;
+        if !seen.insert(node.id.clone()) {
+            continue;
+        }
         out.push(node);
     }
     Ok(out)
+}
+
+/// 检出 `maps/*/index.yaml` 里**重复声明同一 id** 的目录（历史遗留双份）。
+///
+/// `load_maps` 会在内存里去重（保留先加载的一份），但磁盘上的重复必须让
+/// 作者看见——它是「保存后编辑丢失」这类事故的温床（见 `load_maps` 注释
+/// 里的实测事故）。**只提示，不阻止**（AGENTS §7.5 V1）。
+fn detect_duplicate_map_ids(root: &Path) -> Vec<Diagnostic> {
+    let maps_dir = root.join("maps");
+    let mut out = Vec::new();
+    if !maps_dir.is_dir() {
+        return out;
+    }
+    // id → 首次出现的目录名（按目录名排序遍历，与 load_maps 同一顺序）。
+    let mut first_seen: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let Ok(entries) = std::fs::read_dir(&maps_dir) else {
+        return out;
+    };
+    let mut dirs: Vec<std::path::PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.join("index.yaml").is_file())
+        .collect();
+    dirs.sort();
+    for dir in dirs {
+        let Some(dir_name) = dir.file_name().and_then(|n| n.to_str()).map(str::to_owned) else {
+            continue;
+        };
+        let Ok(text) = std::fs::read_to_string(dir.join("index.yaml")) else {
+            continue;
+        };
+        // 只需 id 字段：用最小结构解析，失败跳过（语法错误另有加载期诊断）。
+        #[derive(serde::Deserialize)]
+        struct OnlyId {
+            id: String,
+        }
+        let Ok(parsed) = serde_yaml::from_str::<OnlyId>(&text) else {
+            continue;
+        };
+        match first_seen.get(&parsed.id) {
+            None => {
+                first_seen.insert(parsed.id.clone(), dir_name);
+            }
+            Some(first) => out.push(crate::diagnostics::error(
+                format!("duplicate-map-id:{}:{}", parsed.id, dir_name),
+                format!(
+                    "地图 id「{id}」在 maps/ 下被两个目录重复声明（`{first}` 与 `{dir_name}`）：                     加载只保留先出现的 `{first}`，而保存按 id 写 `maps/<id>/index.yaml`——                     两份会互相覆盖，对后一份的编辑会丢失。请删除或改名其中一个目录。仅提示，不阻止保存。",
+                    id = parsed.id,
+                    first = first,
+                    dir_name = dir_name
+                ),
+            )),
+        }
+    }
+    out
 }
 
 /// 检出地图图标里 `drill_into` 指向不存在地图的悬空引用。
@@ -1267,6 +1342,9 @@ impl Project {
             ));
         }
 
+        // 磁盘层重复地图 id（同 id 双份目录）——Error 级但不阻止（V1）。
+        // 必须在 `load_world` 之后单独扫盘：内存里的重复已被 `load_maps` 去重。
+        d.items.extend(detect_duplicate_map_ids(&self.root));
         // 派生提示（相遇却未写事件）——**永不**产生 Error。
         d.extend(derive_hints(&world));
         // 势力层 / 归属边诊断（ADR-0027 D10）：只列出，不阻止保存（V1）。
@@ -1388,5 +1466,118 @@ mod faction_layer_io_tests {
         relations.sort();
         assert_eq!(relations, vec![None, Some("claim".into())]);
         let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod duplicate_map_id_tests {
+    //! 同 id 双份地图目录（2026-10-31 实测事故：`create_map` 回填的 children
+    //! 被另一份同 id 覆盖 → 新图保存后变孤儿）。三条回归锚点：
+    //! 加载去重、保存不覆盖、诊断能让作者看见。
+
+    use super::*;
+    use wv_core::map::{MapLevel, MapNode};
+
+    fn temp_project(tag: &str) -> (std::path::PathBuf, Project) {
+        let root =
+            std::env::temp_dir().join(format!("wv_io_dup_map_{}_{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let p = Project::create(&root, "test").expect("create project");
+        (root, p)
+    }
+
+    fn write_map(root: &std::path::Path, dir: &str, id: &str, children: &[&str]) {
+        let node = MapNode {
+            id: wv_core::Id::new_unchecked(id),
+            name: format!("{dir} 份"),
+            level: MapLevel::World,
+            children: children
+                .iter()
+                .map(|c| wv_core::Id::new_unchecked(*c))
+                .collect(),
+            ..MapNode::default()
+        };
+        let d = root.join("maps").join(dir);
+        std::fs::create_dir_all(&d).expect("mkdir maps");
+        let text = serde_yaml::to_string(&node).expect("yaml");
+        std::fs::write(d.join("index.yaml"), text).expect("write index");
+    }
+
+    /// 加载侧：同 id 双份只保留**先加载**（目录名排序在前）的一份。
+    #[test]
+    fn load_keeps_first_map_when_ids_duplicate() {
+        let (root, p) = temp_project("load");
+        write_map(&root, "world", "world_main", &["map_1"]);
+        write_map(&root, "world_main", "world_main", &[]);
+        let w = p.load_world().expect("load");
+        let hits: Vec<_> = w
+            .maps
+            .iter()
+            .filter(|m| m.id.as_str() == "world_main")
+            .collect();
+        assert_eq!(hits.len(), 1, "同 id 必须去重成一份，实得 {}", hits.len());
+        assert!(
+            hits[0].children.iter().any(|c| c.as_str() == "map_1"),
+            "保留的应是先加载的 `world` 份（children 含 map_1），实得 {:?}",
+            hits[0].children
+        );
+    }
+
+    /// 保存侧：内存里仍是双份（绕过加载的构造）时只写一份，不得互相覆盖。
+    #[test]
+    fn save_writes_duplicate_ids_once_first_wins() {
+        let (_root, mut p) = temp_project("save");
+        let mut w = World::default();
+        let mut first = MapNode {
+            id: wv_core::Id::new_unchecked("world_main"),
+            name: "first".into(),
+            level: MapLevel::World,
+            ..MapNode::default()
+        };
+        first.children.push(wv_core::Id::new_unchecked("map_new"));
+        let second = MapNode {
+            id: wv_core::Id::new_unchecked("world_main"),
+            name: "second".into(),
+            level: MapLevel::World,
+            ..MapNode::default()
+        };
+        w.maps.push(first);
+        w.maps.push(second);
+        p.save_world(&w, &[]).expect("save");
+
+        let reloaded = p.load_world().expect("reload");
+        let m = reloaded
+            .maps
+            .iter()
+            .find(|m| m.id.as_str() == "world_main")
+            .expect("world_main 应在");
+        assert!(
+            m.children.iter().any(|c| c.as_str() == "map_new"),
+            "先写的一份（含回填的 children）不得被后一份覆盖，实得 {:?}",
+            m.children
+        );
+    }
+
+    /// 诊断侧：磁盘上的同 id 双份目录必须报 Error（只提示不阻止）。
+    #[test]
+    fn diagnose_reports_duplicate_map_ids() {
+        let (root, p) = temp_project("diag");
+        write_map(&root, "world", "world_main", &[]);
+        write_map(&root, "world_main", "world_main", &[]);
+        let d = p.diagnose().expect("diagnose");
+        let hit = d
+            .items
+            .iter()
+            .find(|i| i.fingerprint.starts_with("duplicate-map-id:world_main:"));
+        assert!(
+            hit.is_some(),
+            "应报出重复 map id；实得 {:?}",
+            d.items.iter().map(|i| &i.fingerprint).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            hit.map(|i| i.level),
+            Some(crate::diagnostics::DiagLevel::Error),
+            "重复 id 会导致保存互相覆盖，按 Error 级呈现"
+        );
     }
 }

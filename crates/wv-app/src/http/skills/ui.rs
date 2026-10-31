@@ -113,6 +113,30 @@ pub fn ui_tool_schemas() -> Vec<(&'static str, &'static str, Value)> {
             }),
         ),
         (
+            "set_current_map",
+            "切当前图（等价地图树/面包屑进入）：钻入目标图并把相机过渡过去。用于验收脚本「进入新建的图看效果」。返回切换后的 UI 快照。",
+            json!({
+                "type": "object",
+                "required": ["map"],
+                "properties": {
+                    "map": {"type": "string", "description": "目标地图 id（须存在于当前工程）"}
+                },
+                "additionalProperties": false,
+            }),
+        ),
+        (
+            "set_zoom",
+            "设置缩放（世界单位 / 屏幕像素）：等价滚轮缩放到该档。数值越大看得越远（世界图全国视野常 1.5–7；CellMap 细编辑常 0.05–0.5）。返回切换后的 UI 快照（含 scale）。",
+            json!({
+                "type": "object",
+                "required": ["scale"],
+                "properties": {
+                    "scale": {"type": "number", "description": "正数；世界单位每屏幕像素"}
+                },
+                "additionalProperties": false,
+            }),
+        ),
+        (
             "screenshot",
             "截取当前主窗口画面（含全部面板叠加），以 MCP image content（base64 PNG）回传；同时落盘 PNG。save_to 可指定落盘路径（缺省落系统临时目录 wv-screenshots/）。GUI 最小化时无帧产出，10s 超时报错。",
             json!({
@@ -226,6 +250,7 @@ pub fn ui_snapshot(view: &ViewState, panels: &crate::state::PanelState) -> UiSta
     UiStateSnapshot {
         view_mode: view_mode_name(view.mode).to_string(),
         current_map: view.current_map.clone(),
+        scale: view.scale,
         panels: Panel::ALL
             .iter()
             .map(|p| PanelVis {
@@ -250,9 +275,12 @@ pub fn handle_ui_request(
         // ADR-0096：这两类要 World 侧资源（合成队列 / 命令面板），处理在
         // `http_integration::drain_http_commands` 的 ui_hook——到达本纯函数
         // 即内部路由错误（与 Screenshot 同款例外，注释见模块头）。
-        UiRequest::EnqueueInput { .. } | UiRequest::SetMapTool { .. } => {
-            Some(UiReply::Error("内部错误：输入/工具请求应走 drain 侧处理".into()))
-        }
+        UiRequest::EnqueueInput { .. }
+        | UiRequest::SetMapTool { .. }
+        | UiRequest::SetCurrentMap { .. }
+        | UiRequest::SetZoom { .. } => Some(UiReply::Error(
+            "内部错误：输入/地图导航请求应走 drain 侧处理".into(),
+        )),
         UiRequest::GetState => Some(UiReply::State(ui_snapshot(view, panels))),
         UiRequest::SetViewMode { mode } => match parse_view_mode(&mode) {
             Some(m) => {
@@ -392,6 +420,25 @@ pub async fn dispatch_ui(
             let inp: In = serde_json::from_value(args)
                 .map_err(|e| JsonRpcError::invalid_params(format!("set_map_tool 参数非法: {e}")))?;
             UiRequest::SetMapTool { tool: inp.tool }
+        }
+        "set_current_map" => {
+            #[derive(serde::Deserialize)]
+            struct In {
+                map: String,
+            }
+            let inp: In = serde_json::from_value(args).map_err(|e| {
+                JsonRpcError::invalid_params(format!("set_current_map 参数非法: {e}"))
+            })?;
+            UiRequest::SetCurrentMap { map: inp.map }
+        }
+        "set_zoom" => {
+            #[derive(serde::Deserialize)]
+            struct In {
+                scale: f32,
+            }
+            let inp: In = serde_json::from_value(args)
+                .map_err(|e| JsonRpcError::invalid_params(format!("set_zoom 参数非法: {e}")))?;
+            UiRequest::SetZoom { scale: inp.scale }
         }
         "screenshot" => {
             #[derive(serde::Deserialize)]

@@ -1,3 +1,8 @@
+# 世界地图索引（示例）——本文件是 `world_main` 的**唯一**声明（2026-10-31 合并）。
+# 历史遗留：`maps/world/` 曾声明同一 id（同 id 双份），加载按目录名排序先命中
+# `world` 份、保存却按 id 写到本目录 → 两份互相覆盖（create_map 回填的 children
+# 被抹掉，新图存盘后变孤儿）。已删除 `maps/world/`，其 icons / unit_per_km 并入本文件；
+# 其地形（声明校验和 4fd4c70e 指向的那份）已移到 `maps/world_main/terrain.bin`。
 id: world_main
 name: 演示大陆
 level: world
@@ -6,41 +11,50 @@ level: world
 # 视口左下角的比例尺浮层依此换算（未声明则该浮层静默不显示）。
 unit_per_km: 4
 children:
-- map_1
-icons: []
-layers:
-- id: layer_terrain
-  name: 地形
-  kind: terrain
-  visible: true
-  locked: false
-  opacity: 1.0
-  z: 0
-  source: terrain.bin
-- id: layer_borders
-  name: 疆界
-  kind: border
-  visible: true
-  locked: false
-  opacity: 0.8
-  z: 10
-  source: borders.yaml
-- id: layer_roads
-  name: 道路
-  kind: road
-  visible: true
-  locked: false
-  opacity: 0.9
-  z: 20
-  source: roads.yaml
+  - map_1
+# 城市子图（map_1）的钻入入口：归一化锚点落在大陆中部的平原上，
+# 双击即钻入城市图（场景分区编辑 M1 的演示入口）。
+icons:
+  - id: icon_city_map_1
+    anchor:
+      - 0.30
+      - 0.55
+    shape: diamond
+    size: 14.0
+    drill_into: map_1
 extent:
   width: 4096.0
   height: 4096.0
 raster:
-  path: maps/world/terrain.bin
+  path: maps/world_main/terrain.bin
   encoding: i16
   width: 1024
   height: 1024
   chunk: 256
   format_version: 2
   checksum: 4fd4c70e
+layers:
+  - id: layer_terrain
+    name: 地形
+    kind: terrain
+    visible: true
+    locked: false
+    opacity: 1.0
+    z: 0
+    source: terrain.bin
+  - id: layer_borders
+    name: 疆界
+    kind: border
+    visible: true
+    locked: false
+    opacity: 0.8
+    z: 10
+    source: borders.yaml
+  - id: layer_roads
+    name: 道路
+    kind: road
+    visible: true
+    locked: false
+    opacity: 0.9
+    z: 20
+    source: roads.yaml

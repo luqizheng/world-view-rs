@@ -295,8 +295,8 @@ mod tests {
         let tools = resp["result"]["tools"].as_array().unwrap();
         assert_eq!(
             tools.len(),
-            17,
-            "应暴露 17 个 skill（9 数据 + 6 UI + 2 命名；ADR-0096 增合成输入与切工具）"
+            19,
+            "应暴露 19 个 skill（9 数据 + 8 UI + 2 命名；ADR-0096 增合成输入/切工具/切图/缩放）"
         );
 
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -319,6 +319,8 @@ mod tests {
                 "set_panel_visible",
                 "enqueue_ui_input",
                 "set_map_tool",
+                "set_current_map",
+                "set_zoom",
                 "screenshot",
             ]
         );
@@ -490,7 +492,7 @@ mod tests {
         assert!(resp.result.is_some());
         assert!(resp.error.is_none());
         let tools = resp.result.unwrap()["tools"].as_array().unwrap().clone();
-        assert_eq!(tools.len(), 17);
+        assert_eq!(tools.len(), 19);
     }
 
     #[test]

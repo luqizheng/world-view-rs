@@ -55,6 +55,12 @@ pub enum UiRequest {
     /// 切地图工具（词表见 skills::ui::parse_map_tool）。走命令面板既有的
     /// `SelectMapTool` 通路（互斥全关 / 面板联动零重复实现）。
     SetMapTool { tool: String },
+    /// 切当前图（2026-10-31）：等价地图树 / 面包屑进入——`DrillState::drill_to`
+    /// 定位到目标图，相机过渡由 `drill_transition` 接手。
+    SetCurrentMap { map: String },
+    /// 设置缩放（世界单位 / 屏幕像素）：等价滚轮缩放到该档（一次写
+    /// `ViewState.scale` + 相机正交尺寸；后续滚轮照常接管）。
+    SetZoom { scale: f32 },
 }
 
 /// 合成输入事件（HTTP DTO；坐标 = 根图帧世界坐标）。
@@ -91,6 +97,10 @@ pub enum UiReply {
 pub struct UiStateSnapshot {
     pub view_mode: String,
     pub current_map: String,
+    /// 当前缩放（世界单位 / 屏幕像素；= `ViewState.scale`）。
+    /// 验收脚本用它判断「现在看清到什么档」。
+    #[serde(default)]
+    pub scale: f32,
     pub panels: Vec<PanelVis>,
 }
 

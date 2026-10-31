@@ -358,6 +358,12 @@ pub fn drain_http_commands(
     // 合成输入（ADR-0096）：队列入队 + 命令面板借道 SelectMapTool。
     mut synthetic: ResMut<crate::ui_shell::synthetic_input::SyntheticInputQueue>,
     mut palette: ResMut<crate::ui_command_palette::CommandPalette>,
+    // 地图导航 / 相机（ADR-0096 追记）：AI 验收需要程序化「切图 + 定缩放」，
+    // 替代早先只能靠 WV_DRILL / WV_SCALE 启动探针的绕行。
+    (mut drill, mut camera_q): (
+        ResMut<wv_render::state::DrillState>,
+        Query<(&mut Transform, &mut Projection), With<Camera2d>>,
+    ),
 ) {
     // 把 save_dir 拷成 owned，先结束 `projection.project_dir` 的不可变借用，
     // 然后才能用 `&mut projection.world`（§3.3）。
@@ -366,6 +372,9 @@ pub fn drain_http_commands(
         .as_deref()
         .map(std::path::Path::new)
         .map(|p| p.to_path_buf());
+    // 地图导航 / 缩放延迟到 drain 之后：`drill_to` 要 `&projection.world`，
+    // 而该借用必须等 `drain_messages_with(&mut projection.world, …)` 结束。
+    let mut pending_nav: Vec<(UiRequest, tokio::sync::oneshot::Sender<UiReply>)> = Vec::new();
     let mut ui_hook = |req: UiRequest, reply_tx: tokio::sync::oneshot::Sender<UiReply>| match req {
         UiRequest::Screenshot { save_to } => {
             begin_screenshot(save_to.as_deref(), &mut commands, &mut pending, reply_tx);
@@ -383,6 +392,10 @@ pub fn drain_http_commands(
                 }
             }
             let _ = reply_tx.send(UiReply::State(ui::ui_snapshot(&view, &panels)));
+        }
+        // 切当前图 / 设置缩放（ADR-0096 追记）：delayed 到 drain 之后执行。
+        r @ (UiRequest::SetCurrentMap { .. } | UiRequest::SetZoom { .. }) => {
+            pending_nav.push((r, reply_tx));
         }
         // 切地图工具（ADR-0096）：借用命令面板既有 SelectMapTool 通路
         // （apply_pending_commands 消费，互斥全关 / 面板联动零重复实现）。
@@ -414,6 +427,48 @@ pub fn drain_http_commands(
     // 本帧处理过消息 = 有未落盘的编辑，点亮顶栏 `●`（与 GUI 编辑同语义）。
     if processed {
         projection.dirty = true;
+    }
+
+    // 地图导航 / 缩放（ADR-0096 追记）——在 drain 之后，此时 `&projection.world`
+    // 借用可用（drain 的可变借用已结束）。
+    for (req, reply_tx) in pending_nav {
+        match req {
+            UiRequest::SetCurrentMap { map } => match wv_core::Id::new(&map) {
+                Ok(id) => {
+                    if drill.drill_to(&projection.world, &id) {
+                        // 立即同步 `ViewState.current_map`：常态由每帧同步系统
+                        // 从 drill 写回，但回执若等下一帧就是旧值（验收脚本
+                        // 惯于「切完立刻断言」）。同步写 = 回执即真。
+                        view.current_map = id.as_str().to_owned();
+                        let _ = reply_tx.send(UiReply::State(ui::ui_snapshot(&view, &panels)));
+                    } else {
+                        let _ = reply_tx.send(UiReply::Error(format!(
+                            "地图 `{map}` 不存在或不在 parent/children 链路（drill_to 返回 false）"
+                        )));
+                    }
+                }
+                Err(e) => {
+                    let _ = reply_tx.send(UiReply::Error(format!("map id 非法: {e}")));
+                }
+            },
+            UiRequest::SetZoom { scale } => {
+                if scale.is_finite() && scale > 0.0 {
+                    view.scale = scale;
+                    wv_render::camera::apply_view_to_camera(
+                        view.camera_center,
+                        scale,
+                        &mut camera_q,
+                    );
+                    let _ = reply_tx.send(UiReply::State(ui::ui_snapshot(&view, &panels)));
+                } else {
+                    let _ = reply_tx.send(UiReply::Error(format!(
+                        "scale 必须是正有限数，收到 {scale}"
+                    )));
+                }
+            }
+            // 闭包只把这两类放进延迟队列。
+            _ => {}
+        }
     }
 }
 
