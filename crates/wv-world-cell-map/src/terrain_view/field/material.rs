@@ -162,7 +162,7 @@ pub enum ViewBranch {
     /// 势力填色要压在这层素底上，故它必须**平**：山体明暗会与势力色打架。
     /// 编码 `shape.y = 2.0`（WGSL 侧按阈值比较，见 `code()`）。
     Flat,
-    /// 方格平涂（**实验**，2026-11-01 用户提出，README §12-59 待裁）：
+    /// 方格平涂（ADR-0100，2026-11-01 用户提出并当日拍板转正）：
     /// CellMap 数据视图的「零加工」档——逐格 = 冻结群系表**真色**
     /// （`biome_raw::BIOME_RAW_COLORS` / `DISTRICT_RAW_COLORS`，经
     /// [`FieldParams::biome_table`] 进 uniform），无晕渲 / 无海拔色带 /
@@ -171,14 +171,16 @@ pub enum ViewBranch {
     /// 与 [`ViewBranch::Flat`]（政治页素底）的区别：Flat 是「海陆**两色** +
     /// 海岸线」，本分支是「每格**自己的**群系色、直出」；与 `BiomeRaw` 的
     /// 区别：BiomeRaw 是 5 档近似色 + 海拔色带 + 三光晕渲 + 海岸色带 +
-    /// 墨线的方格数据视图（追记十七契约），本分支把这些加工全部关掉。
-    /// 编码 `shape.y = 3.0`。只经 wv-app `WV_CELLFLAT` 探针进入，缺省不可达。
+    /// 墨线的旧方格数据视图（追记十七契约，ADR-0100 修订），本分支把这些
+    /// 加工全部关掉。编码 `shape.y = 3.0`。**Topographic 的默认分支**
+    /// （wv-render `field_branch_of`）；旧 BiomeRaw 只剩 `WV_CELLRAW` 对照
+    /// 探针与 `terrain_field_demo` 可达。
     CellFlat,
 }
 
 /// 政治页素底分支的 `shape.y` 编码值。
 pub const FLAT_BRANCH_CODE: f32 = 2.0;
-/// 方格平涂分支（实验）的 `shape.y` 编码值。
+/// 方格平涂分支（ADR-0100）的 `shape.y` 编码值。
 pub const CELL_FLAT_BRANCH_CODE: f32 = 3.0;
 
 impl ViewBranch {
@@ -376,7 +378,7 @@ pub struct FieldParams {
     ///
     /// T6 起被 WGSL 双光源公式正式读取（T5 只是惰性预载，语义翻转日为 T6）。
     pub light_aux: Vec4,
-    /// 方格平涂分支（[`ViewBranch::CellFlat`]，实验）的**群系真色表**：
+    /// 方格平涂分支（[`ViewBranch::CellFlat`]，ADR-0100）的**群系真色表**：
     /// 索引 = biome 字节 0..=32——0..=20 = 冻结群系表
     /// `biome_raw::BIOME_RAW_COLORS`（槽 0 是 NONE 占位，shader 不读它，
     /// NONE 按 surface 走 [`FieldParams::biome_none_fallback`]）；21..=32 =
@@ -662,7 +664,7 @@ pub fn default_params(
         // 旧 T17 钳制对（RELIEF_LO/HI）随 T6 语义翻转整体退役。
         // 素底分支（ADR-0079 T5）**不画晕渲**：政治页是平色面，山体明暗
         // 会与势力填色打架——环境光置 1、双漫反射置 0 = 强度恒 1 的平色。
-        // 方格平涂（实验）同理：零加工档，明暗必须恒 1（shader 侧其实
+        // 方格平涂（ADR-0100）同理：零加工档，明暗必须恒 1（shader 侧其实
         // 在本分支早退不读 relief，这里保持 uniform 语义自洽）。
         relief: if matches!(branch, ViewBranch::Flat | ViewBranch::CellFlat) {
             Vec4::new(1.0, 0.0, 0.0, 0.0)
@@ -697,7 +699,7 @@ pub fn default_params(
             crate::shading::LIGHT_AUX[2],
             0.0,
         ),
-        // 方格平涂真色表（实验）：所有分支都装满——uniform 是整体上传，
+        // 方格平涂真色表（ADR-0100）：所有分支都装满——uniform 是整体上传，
         // 只有 CellFlat 分支读它；常量表装填是零成本的编译期数据搬运。
         biome_table: biome_table_uniform(),
         biome_none_fallback: biome_fallback_uniform(),
@@ -1145,7 +1147,7 @@ mod political_page_tests {
         assert_eq!(
             ViewBranch::CellFlat.code(),
             3.0,
-            "CellFlat（方格平涂实验）编码"
+            "CellFlat（方格平涂，ADR-0100）编码"
         );
     }
 
@@ -1182,7 +1184,7 @@ mod political_page_tests {
             "非素底分支保留 ADR-0077 三光系数，got {:?}",
             themed.relief
         );
-        // 方格平涂（实验）同属平色面：明暗必须恒 1。
+        // 方格平涂（ADR-0100）同属平色面：明暗必须恒 1。
         let cell_flat = default_params(
             [512.0, 512.0],
             6.0,

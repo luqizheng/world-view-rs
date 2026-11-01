@@ -20,8 +20,8 @@
 //! 启动读一次）与 `WV_SCALE`（钉死相机缩放——对比帧采集的同机位锚，等
 //! `WV_DRILL` 钻入过渡结束后每帧幂等写回）。
 //!
-//! 家族增列（2026-11-01 实验）：`WV_CELLFLAT`（CellMap 方格平涂——Topographic
-//! 分支切 `CellFlat`，README §12-59 待裁），启动读一次。
+//! 家族增列（ADR-0100）：`WV_CELLRAW`（CellMap 旧加工档对照——Topographic
+//! 分支从默认 `CellFlat` 回退 `BiomeRaw`，仅 A/B 对照），启动读一次。
 //!
 //! 家族增列（ADR-0077 §4 校准轮）：`WV_Z_EXAG`（纵向夸张运行时覆盖）——
 //! 读取逻辑与生效点都在 `wv-world-cell-map` 的 `shading::z_exag()`（GPU
@@ -89,22 +89,22 @@ pub fn apply_env_strip(mut view: ResMut<ViewState>) {
     }
 }
 
-/// `WV_CELLFLAT`：CellMap **方格平涂**探针（2026-11-01 实验，README §12-59
-/// 待裁），启动读一次。存在即真（同 `WV_FIELD` 先例）。
+/// `WV_CELLRAW`：CellMap **旧加工档对照**探针（ADR-0100 转正后的 A/B 对照
+/// 窗），启动读一次。存在即真（同 `WV_FIELD` 先例）。
 ///
-/// 置位后 Topographic（CellMap）的场取色分支从 `BiomeRaw` 切到
-/// `ViewBranch::CellFlat`——逐格 = 冻结群系表**真色**直出（水也取各群系
-/// 自己的颜色），无晕渲 / 无海拔色带 / 无海岸三段色带 / 无岸线墨线 /
-/// 无水陆亚格过渡 / 无域扭曲，海岸与群系边界就是格子的硬边。与
-/// `WV_STRIP`（剥 Themed 加工层）正交：本探针换的是整个取色分支。
+/// Topographic（CellMap）的场取色分支**缺省已是 `CellFlat` 方格平涂**
+/// （逐格 = 冻结群系表真色直出，无晕渲 / 海拔色带 / 海岸三段色带 / 岸线
+/// 墨线 / 水陆亚格过渡 / 域扭曲——ADR-0100 转正裁定）。本探针置位时回退
+/// 旧 `BiomeRaw` 加工档（近似色 + 色带 + 晕渲），仅作对照、缺省不可达。
+/// 转正前的触发探针是 `WV_CELLFLAT`（语义相反），转正时更名。
 ///
 /// 只影响 Topographic 模式；其余模式的分支选择对它免疫（判据收口在
 /// `field_branch_of`，真值表测试在那边）。分支是 `FieldKey` 结构量，
 /// 启动常量不构成运行期重打。
-pub fn apply_env_cell_flat(mut view: ResMut<ViewState>) {
-    if std::env::var_os("WV_CELLFLAT").is_some() {
-        view.cell_flat = true;
-        info!("[wv] WV_CELLFLAT → cell_flat = true（CellMap 方格平涂实验）");
+pub fn apply_env_cell_raw(mut view: ResMut<ViewState>) {
+    if std::env::var_os("WV_CELLRAW").is_some() {
+        view.cell_raw = true;
+        info!("[wv] WV_CELLRAW → cell_raw = true（CellMap 旧加工档对照）");
     }
 }
 

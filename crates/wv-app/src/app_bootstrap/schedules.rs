@@ -43,10 +43,10 @@ pub(super) fn register(app: &mut App) {
             // `WV_STRIP` 剥离探针（ADR-0088 Task 4）：启动读一次，先于首帧
             // 场同步（Startup 全部先于 Update），首帧 uniform 即带掩码。
             crate::debug_probe::apply_env_strip,
-            // `WV_CELLFLAT` 方格平涂探针（2026-11-01 实验，README §12-59）：
-            // 同上启动读一次——分支进 `FieldKey`，必须先于首帧场同步，
-            // 否则首帧按 BiomeRaw 打、第二帧才换 CellFlat（白付一次重打）。
-            crate::debug_probe::apply_env_cell_flat,
+            // `WV_CELLRAW` 旧加工档对照探针（ADR-0100）：同上启动读一次——
+            // 分支进 `FieldKey`，必须先于首帧场同步，否则首帧按默认 CellFlat
+            // 打、第二帧才换 BiomeRaw（白付一次重打）。
+            crate::debug_probe::apply_env_cell_raw,
             setup_camera,
             setup_terrain_texture_after_world,
         )

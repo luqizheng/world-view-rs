@@ -53,7 +53,7 @@ struct FieldParams {
     // 真 45° 单位向量），w 预留。双光源明暗公式在下方（常量镜像 shading.rs，
     // 注释互指）；std140 尾部追加的布局纪律见 material.rs 同名注释。
     light_aux: vec4<f32>,
-    // 方格平涂分支（CellFlat，实验 WV_CELLFLAT）：群系真色表（索引 = biome
+    // 方格平涂分支（CellFlat，ADR-0100 转正默认）：群系真色表（索引 = biome
     // 字节 0..=32；0..=20 冻结群系表 / 21..=32 场景分区表）+ 回退色
     // [水, 陆]。装填真源 = biome_raw 常量表（material.rs 同名注释互指）；
     // **尾部追加**，std140 布局纪律同上。
@@ -144,7 +144,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         return p.paper;
     }
 
-    // ── 方格平涂分支（实验 WV_CELLFLAT，README §12-59 待裁）──────────────
+    // ── 方格平涂分支（ADR-0100：Topographic 默认分支）───────────────────
     // `shape.y = 3.0`（CellFlat）：**每格 = 自己的群系真色，直出**。
     // 在一切加工之前早退，天然豁免：域扭曲（下方 `warp_offset`）、海拔
     // 色带、三光晕渲、海岸三段色带、近岸白滩、岸线墨线、水陆亚格过渡、

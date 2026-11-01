@@ -101,7 +101,7 @@ pub fn sync_atmosphere(
     // 这里消费。探针只影响场管线 **Themed 分支**在场时的画面：分支判据与场
     // 桥接同一条 `field_branch_of`（不另写布尔式），其余分支/模式 veil 照旧。
     let strip_veil_alive = strip_veil_on(view.strip_mask)
-        || field_branch_of(view.mode, layers.terrain.visible, view.cell_flat) != ViewBranch::Themed;
+        || field_branch_of(view.mode, layers.terrain.visible, view.cell_raw) != ViewBranch::Themed;
     let pal = &conv_palette(&view.active_theme.palette);
     if let Some((_, _, mat)) = &atm.veil {
         let veil_alpha = if strip_veil_alive {

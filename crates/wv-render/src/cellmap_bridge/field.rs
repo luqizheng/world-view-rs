@@ -264,25 +264,25 @@ pub fn bake_height_span(data: &wv_core::terrain::TerrainData) -> f32 {
 
 /// 主 App 的场渲染同步（ADR-0053 D1，Phase 1 接线 2026-10-24）。
 ///
-/// 取色分支的唯一选择点（ADR-0079 T5）。
+/// 取色分支的唯一选择点（ADR-0079 T5；Topographic 默认分支 ADR-0100 修订）。
 ///
-/// - Topographic（CellMap）恒走 [`ViewBranch::BiomeRaw`]——方格数据视图，
-///   自然图开关不介入（ADR-0051 §5）；**`cell_flat` 探针置位时改走
-///   [`ViewBranch::CellFlat`]**（方格平涂实验，`ViewState::cell_flat`，
-///   README §12-59 待裁）——探针只在本档生效，其余模式对它免疫；
+/// - Topographic（CellMap）默认走 [`ViewBranch::CellFlat`]——方格平涂，
+///   逐格群系真色直出、零加工（ADR-0100 转正裁定，修订追记十七的色带
+///   契约）；**`cell_raw` 对照探针置位时回退旧 [`ViewBranch::BiomeRaw`]**
+///   加工档（近似色 + 色带 + 晕渲，仅 A/B 对照窗）；
 /// - 其余模式：地形层可见 → [`ViewBranch::Themed`]（主题色板）；
 ///   **不可见 → [`ViewBranch::Flat`]（政治图集页素底）**——不退场，
 ///   地图全空则势力填色无处可压。
 pub fn field_branch_of(
     mode: crate::state::ViewMode,
     terrain_visible: bool,
-    cell_flat: bool,
+    cell_raw: bool,
 ) -> ViewBranch {
     if mode == crate::state::ViewMode::Topographic {
-        if cell_flat {
-            ViewBranch::CellFlat
-        } else {
+        if cell_raw {
             ViewBranch::BiomeRaw
+        } else {
+            ViewBranch::CellFlat
         }
     } else if terrain_visible {
         ViewBranch::Themed
@@ -421,9 +421,9 @@ pub fn sync_terrain_field(
         return;
     };
 
-    // ── 分支：CellMap 看原始群系色（cell_flat 探针置位 → 方格平涂实验）/
+    // ── 分支：CellMap 默认方格平涂（cell_raw 对照探针 → 旧加工档）/
     // 其余按地形层可见否选主题或素底 ──
-    let branch = field_branch_of(view.mode, layers.terrain.visible, view.cell_flat);
+    let branch = field_branch_of(view.mode, layers.terrain.visible, view.cell_raw);
     let map = Some(source.id.clone());
     let palette_id: &'static str = view.active_theme.id;
 
@@ -819,24 +819,25 @@ mod field_routing_tests {
         }
     }
 
-    /// WV_CELLFLAT 探针（`ViewState::cell_flat`）的分支真值表：
-    /// 只把 Topographic 从 BiomeRaw 切到 CellFlat，**不得越出该模式**——
-    /// 其余七档对探针免疫（Browse 的主题呈现 / 政治页素底各有自己的语义，
-    /// 实验探针染指它们 = 探针越支，与 WV_STRIP「探针不得越支」同一纪律）。
+    /// ADR-0100 转正锚 + WV_CELLRAW 对照探针（`ViewState::cell_raw`）真值表：
+    /// Topographic **默认 CellFlat**（方格平涂），探针置位才回退 BiomeRaw；
+    /// 且**不得越出该模式**——其余七档对探针免疫（Browse 的主题呈现 / 政治页
+    /// 素底各有自己的语义，对照探针染指它们 = 探针越支，与 WV_STRIP「探针
+    /// 不得越支」同一纪律）。
     #[test]
-    fn cell_flat_probe_switches_topographic_branch_only() {
+    fn topographic_defaults_to_cell_flat_and_cell_raw_probe_restores_biome_raw() {
         assert_eq!(
             field_branch_of(ViewMode::Topographic, true, false),
-            ViewBranch::BiomeRaw,
-            "探针缺省 = 现行 BiomeRaw 契约"
+            ViewBranch::CellFlat,
+            "探针缺省 = 方格平涂（ADR-0100 转正默认）"
         );
         assert_eq!(
             field_branch_of(ViewMode::Topographic, true, true),
-            ViewBranch::CellFlat,
-            "探针置位 → 方格平涂分支"
+            ViewBranch::BiomeRaw,
+            "探针置位 → 回退旧 BiomeRaw 加工档（对照窗）"
         );
         assert_eq!(
-            field_branch_of(ViewMode::Topographic, false, true),
+            field_branch_of(ViewMode::Topographic, false, false),
             ViewBranch::CellFlat,
             "CellMap 分支不读 terrain_visible（自然图开关不介入，ADR-0051 §5）"
         );
@@ -847,7 +848,7 @@ mod field_routing_tests {
             assert_eq!(
                 field_branch_of(mode, true, true),
                 field_branch_of(mode, true, false),
-                "{mode:?}：cell_flat 置位不得改变分支（探针不越支）"
+                "{mode:?}：cell_raw 置位不得改变分支（探针不越支）"
             );
         }
     }

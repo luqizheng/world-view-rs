@@ -596,8 +596,9 @@ mod bridge_tests {
         // 「自然图关」= 素底政治页：不退场（地图全空则势力填色无处可压），
         // 改走 `ViewBranch::Flat` 分支——平面海陆两色 + 海岸线。
         //
-        // 判据顺序：CellMap（Topographic）恒走 BiomeRaw（那是方格数据视图，
-        // 自然图开关不介入）；其余模式按「地形层可见否」选 Themed / Flat。
+        // 判据顺序：CellMap（Topographic）默认走 CellFlat（方格平涂，ADR-0100；
+        // 那是方格数据视图，自然图开关不介入）；其余模式按「地形层可见否」
+        // 选 Themed / Flat。
 
         #[test]
         fn branch_is_flat_when_natural_map_hidden_outside_topographic() {
@@ -623,17 +624,18 @@ mod bridge_tests {
         }
 
         #[test]
-        fn topographic_mode_always_uses_biome_raw() {
-            // CellMap 是方格数据视图——自然图开关不介入（ADR-0051 §5）。
-            // （cell_flat 探针开启时的 CellFlat 例外在 field.rs 的
-            // `cell_flat_probe_switches_topographic_branch_only` 钉。）
+        fn topographic_mode_defaults_to_cell_flat() {
+            // CellMap 是方格数据视图——自然图开关不介入（ADR-0051 §5）；
+            // 默认分支 = 方格平涂（ADR-0100 转正），BiomeRaw 只剩 WV_CELLRAW
+            // 对照探针可达（真值表在 field.rs
+            // `topographic_defaults_to_cell_flat_and_cell_raw_probe_restores_biome_raw`）。
             assert_eq!(
                 field_branch_of(crate::state::ViewMode::Topographic, true, false),
-                ViewBranch::BiomeRaw
+                ViewBranch::CellFlat
             );
             assert_eq!(
                 field_branch_of(crate::state::ViewMode::Topographic, false, false),
-                ViewBranch::BiomeRaw
+                ViewBranch::CellFlat
             );
         }
 
