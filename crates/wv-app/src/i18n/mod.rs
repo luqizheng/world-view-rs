@@ -197,7 +197,8 @@ mod tests {
     /// （ADR-0028 退役漏清，2026-10-28 一并删除）。
     /// 加 UX 评审势力层轮 44 键（2026-10-31：pen 归属显式选择六键 + HUD 阶段
     /// 七键 + 图层会话段八键 + 势力层页签/层管理廿三键）= 719。
-    /// 加 ADR-0099 POI 两键（要塞 / 营地）= 721。
+    /// 加 ADR-0099 POI 两键（要塞 / 营地）= 721；加编辑 dialog 群系页签
+    /// 「已命名检测」两键（CellDlgBiomeNamedHint / CellDlgBiomeManageHint）= 723。
     #[test]
     fn i18n_all_length_matches_key_count() {
         let mut seen = std::collections::HashSet::new();
@@ -206,10 +207,10 @@ mod tests {
         }
         assert_eq!(
             I18nKey::ALL.len(),
-            721,
-            "ALL 应为 721 项（… POI 类别五键 + ADR-0099 要塞/营地两键）；加新键时同步更新数组长度与元素（got {})",
+            723,
+            "ALL 应为 723 项（… ADR-0099 要塞/营地两键 + 群系页签已命名检测两键）；加新键时同步更新数组长度与元素（got {})",
             I18nKey::ALL.len()
         );
-        assert_eq!(seen.len(), 721, "去重后应仍为 721 项");
+        assert_eq!(seen.len(), 723, "去重后应仍为 723 项");
     }
 }

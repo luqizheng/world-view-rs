@@ -56,6 +56,65 @@ pub fn candidate_at(world: &WorldProjection, map: &Id, cell: (i32, i32)) -> Opti
     Some((region.biome, region.cells))
 }
 
+/// 锚点格落在哪个**已物化自然区**内（编辑 dialog「已命名检测」用）。
+///
+/// 动机（2026-11-01 用户实测）：dialog 群系页签只按格派生候选，对「这片已经
+/// 命名过」毫无感知——重开是空白表单，再点一次物化就产出第二个重复区。
+/// 本判定给 UI 一个闸门：已命中的格子只显示区名 + 管理指引，不再出命名表单。
+///
+/// 点判定 = even-odd 射线法（外环 − 洞环）；格 → 图内局部 wu 的换算与
+/// [`materialize_with_polygon`] **同一条公式**（格角 × cell_size + 两原点差），
+/// 取格中心判定避免落在格线上正负不定。同格命中多个区时取**最后一个**
+/// （`regions` 尾部 = 最新物化）。
+pub fn nature_region_containing(
+    world: &WorldProjection,
+    map: &Id,
+    cell: (i32, i32),
+    cell_size: f32,
+    offset: (f32, f32),
+) -> Option<Id> {
+    if cell_size <= 0.0 || !cell_size.is_finite() {
+        return None;
+    }
+    let px = (cell.0 as f32 + 0.5) * cell_size + offset.0;
+    let py = (cell.1 as f32 + 0.5) * cell_size + offset.1;
+    let mut found = None;
+    for r in &world.world.regions {
+        if !r.is_nature() || r.map != *map {
+            continue;
+        }
+        if point_in_region(&r.polygon, &r.holes, px, py) {
+            found = Some(r.id.clone());
+        }
+    }
+    found
+}
+
+/// even-odd 点在多边形内（外环 − 洞；环顶点为扁平 `[x, y, …]`，环长 < 6 无效）。
+fn point_in_region(polygon: &[f32], holes: &[Vec<f32>], px: f32, py: f32) -> bool {
+    let inside_ring = |ring: &[f32]| -> bool {
+        if ring.len() < 6 {
+            return false;
+        }
+        let mut inside = false;
+        let n = ring.len() / 2;
+        let mut j = n - 1;
+        for i in 0..n {
+            let (xi, yi) = (ring[i * 2], ring[i * 2 + 1]);
+            let (xj, yj) = (ring[j * 2], ring[j * 2 + 1]);
+            if ((yi > py) != (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
+                inside = !inside;
+            }
+            j = i;
+        }
+        inside
+    };
+    if !inside_ring(polygon) {
+        return false;
+    }
+    holes.iter().all(|h| !inside_ring(h))
+}
+
 /// 物化一个自动分区候选区（ADR-0045 D4「命名即物化」）。
 ///
 /// `cell` = 栅格坐标（由调用方按 `cell_pick` 口径从光标反查）。
@@ -593,6 +652,74 @@ mod tests {
         )
         .expect_err("越界格应被拒");
         assert!(err.contains("没有可物化"), "错误文案应说明原因：{err}");
+    }
+
+    /// 已命名检测：物化后同一连通区内任意格都命中**同一个**区（4×4 全草原 =
+    /// 整图一个区），区外格不命中——dialog 据此关掉重复物化的表单。
+    #[test]
+    fn nature_region_containing_finds_the_materialized_region_for_cells_inside() {
+        let (mut world, mut edit) = world_with_terrain();
+        let map = Id::new_unchecked("map_world");
+        assert_eq!(
+            nature_region_containing(&world, &map, (1, 1), 1.0, (0.0, 0.0)),
+            None,
+            "物化前不应命中任何区"
+        );
+        let id = materialize_nature_region_now(
+            &mut world,
+            &mut edit,
+            &view(),
+            "老君山".into(),
+            (1, 1),
+            1.0,
+            (0.0, 0.0),
+        )
+        .expect("物化应成功");
+        for cell in [(0, 0), (1, 1), (3, 3)] {
+            assert_eq!(
+                nature_region_containing(&world, &map, cell, 1.0, (0.0, 0.0)).as_ref(),
+                Some(&id),
+                "格 {cell:?} 应落在已物化区内"
+            );
+        }
+        assert_eq!(
+            nature_region_containing(&world, &map, (7, 7), 1.0, (0.0, 0.0)),
+            None,
+            "区外格不应命中"
+        );
+    }
+
+    /// 坐标换算必须与物化同一条公式：物化时带两原点差 (10, 0)，查询用同一
+    /// 偏移命中、用零偏移落空——偏移漂移会让「已命名」判定静默失灵。
+    #[test]
+    fn nature_region_containing_uses_the_same_origin_offset_as_materialize() {
+        let (mut world, mut edit) = world_with_terrain();
+        let map = Id::new_unchecked("map_world");
+        let id = materialize_nature_region_now(
+            &mut world,
+            &mut edit,
+            &view(),
+            "偏移区".into(),
+            (1, 1),
+            1.0,
+            (10.0, 0.0),
+        )
+        .expect("物化应成功");
+        assert_eq!(
+            nature_region_containing(&world, &map, (1, 1), 1.0, (10.0, 0.0)),
+            Some(id),
+            "同偏移应命中"
+        );
+        assert_eq!(
+            nature_region_containing(&world, &map, (1, 1), 1.0, (0.0, 0.0)),
+            None,
+            "偏移不一致不得误命中"
+        );
+        assert_eq!(
+            nature_region_containing(&world, &map, (1, 1), 0.0, (10.0, 0.0)),
+            None,
+            "非法格尺寸直接落空"
+        );
     }
 
     #[test]

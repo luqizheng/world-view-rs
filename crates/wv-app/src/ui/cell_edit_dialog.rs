@@ -305,6 +305,42 @@ fn render_biome_tab(
     let map = wv_core::Id::new_unchecked(&view.current_map);
     let candidate =
         crate::edit::nature_region_actions::candidate_at(projection, &map, state.anchor);
+    // 已命名检测（2026-11-01 用户实测「物化后重开看不到名字」的根因之一）：
+    // 旧实现只按格派生候选、对「这片已经命名过」毫无感知——重开是空白表单，
+    // 再点一次物化就产出第二个重复区。offset 与物化同一条换算（两原点差）。
+    let offset = (
+        grid.map_origin.x - grid.raster_origin.x,
+        grid.map_origin.y - grid.raster_origin.y,
+    );
+    let named = crate::edit::nature_region_actions::nature_region_containing(
+        projection,
+        &map,
+        state.anchor,
+        grid.cell_size,
+        offset,
+    );
+    if let Some(id) = named {
+        let region_name = projection
+            .world
+            .regions
+            .iter()
+            .find(|r| r.id == id)
+            .map(|r| r.name.clone())
+            .unwrap_or_default();
+        ui.label(
+            egui::RichText::new(t(loc, I18nKey::CellDlgBiomeNamedHint))
+                .small()
+                .color(shell.t2()),
+        );
+        ui.label(egui::RichText::new(region_name).color(shell.t1()));
+        ui.add_space(space::XS);
+        ui.label(
+            egui::RichText::new(t(loc, I18nKey::CellDlgBiomeManageHint))
+                .small()
+                .color(shell.t3()),
+        );
+        return;
+    }
     if let Some((biome, cells)) = candidate {
         let names = &wv_render::terrain_view::biome_raw::BIOME_NAMES_ZH;
         ui.label(
@@ -336,11 +372,7 @@ fn render_biome_tab(
             .clicked()
         {
             // offset 口径 = 候选命名表单同款（map − raster 两原点差，
-            // WORLDVIEW 两套原点陷阱的既有换算）。
-            let offset = (
-                grid.map_origin.x - grid.raster_origin.x,
-                grid.map_origin.y - grid.raster_origin.y,
-            );
+            // WORLDVIEW 两套原点陷阱的既有换算）——与上方已命名检测共用同一值。
             match crate::edit::nature_region_actions::materialize_nature_region_now(
                 projection,
                 edit,

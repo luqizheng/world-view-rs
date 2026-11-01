@@ -852,6 +852,10 @@ pub enum I18nKey {
     CellDlgBiomeName,
     /// 群系页签：语义提示
     CellDlgBiomeHint,
+    /// 群系页签：锚点格已在某自然区内（已命名检测，防重复物化）——名字另起一行显示
+    CellDlgBiomeNamedHint,
+    /// 群系页签：已命名时的管理指引（重命名 / 覆盖物 / 合并在面板）
+    CellDlgBiomeManageHint,
     /// POI 页签：锚定提示（当前编辑对象）
     CellDlgPoiTarget,
     /// Place 表单：重生成标记按钮
@@ -1693,7 +1697,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 721] = [
+    pub const ALL: [I18nKey; 723] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -2099,6 +2103,8 @@ impl I18nKey {
         I18nKey::CellDlgBatchEmpty,
         I18nKey::CellDlgBiomeName,
         I18nKey::CellDlgBiomeHint,
+        I18nKey::CellDlgBiomeNamedHint,
+        I18nKey::CellDlgBiomeManageHint,
         I18nKey::CellDlgPoiTarget,
         I18nKey::InspectorPlaceRegenMarker,
         I18nKey::InspectorFactionFocus,
