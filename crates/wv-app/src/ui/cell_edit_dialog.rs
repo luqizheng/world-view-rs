@@ -1,4 +1,8 @@
-//! CellMap 编辑 dialog（ADR-0097）：双击弹出的**居中**编辑框。
+//! CellMap 编辑 dialog（ADR-0097）：双击弹出、**打开时居中一次**的编辑框。
+//!
+//! 2026-11-01 根修：旧实现 `.anchor(CENTER_CENTER)` 每帧钉死屏幕正中——egui
+//! 的 anchor 语义禁用拖拽，用户反馈「编辑选区无法移动」。改 `default_pos` +
+//! 窗口 id 带 `open_seq`（每次打开重置窗口状态），打开即居中、之后可拖。
 //!
 //! ## 为什么是独立 dialog（用户裁定 2026-10-31）
 //! 1. **可达性**：格子编辑框此前住在笔刷窗（CellMap 编辑段），作者「不知道
@@ -76,7 +80,7 @@ pub fn decide_tab(sel_changed: bool, sel_len: usize, last: CellEditTab) -> CellE
 }
 
 /// dialog 跨帧状态（会话态，不落盘）。`Default` 直接 derive：
-/// open=false、tab=Batch（`CellEditTab::default`）、缓冲全空——与手写
+/// open=false、tab=Batch（`CellEditTab::default`）、seq=0、缓冲全空——与手写
 /// impl 逐字段一致（clippy derivable_impls）。
 #[derive(Resource, Default)]
 pub struct CellEditDialogState {
@@ -86,6 +90,10 @@ pub struct CellEditDialogState {
     pub tab: CellEditTab,
     /// 双击锚定格（栅格坐标）——单格 / 群系页签的编辑对象。
     pub anchor: (i32, i32),
+    /// 打开序号：每次 [`Self::open_at`] 递增，进窗口 egui id——每次打开都
+    /// 拿到全新窗口状态（无记忆位置），`default_pos` 的「居中一次」才生效。
+    /// 若 id 恒定，egui 会记住上次拖走的位置，重开不再居中。
+    pub open_seq: u64,
     /// 群系命名输入缓冲（跨帧持久；物化成功后清空）。
     pub name: String,
     /// POI 快改缓冲（目标变换时从实体重初始化）。
@@ -101,6 +109,7 @@ impl CellEditDialogState {
         self.open = true;
         self.tab = tab;
         self.anchor = anchor;
+        self.open_seq = self.open_seq.wrapping_add(1);
     }
 }
 
@@ -145,10 +154,16 @@ pub fn cell_edit_dialog(
     let mut close = false;
     // X 按钮：本地镜像（state 借位给 show 闭包，不能再借 &mut state.open）。
     let mut visible = state.open;
+    // 打开时居中一次、**之后可拖**（用户反馈「编辑选区无法移动」的根修）：
+    // 旧写法 `.anchor(CENTER_CENTER, …)` 是每帧钉回屏幕正中——egui 的 anchor
+    // 语义**禁用拖拽**，窗口永远搬不动。改 `default_pos`（只在窗口首次出现
+    // 时生效）+ id 带 `open_seq`（每次打开换新窗口状态 = 无记忆位置，重开
+    // 必然重新居中）；打开之后 egui 记住拖放位置，拖动照常工作。
+    let screen_center = ctx.viewport_rect().center();
     egui::Window::new(t(loc, I18nKey::CellDlgTitle))
-        .id(egui::Id::new("wv_cell_edit_dialog"))
+        .id(egui::Id::new("wv_cell_edit_dialog").with(state.open_seq))
         .order(bevy_egui::egui::Order::Foreground)
-        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .default_pos(screen_center)
         .resizable(false)
         .collapsible(false)
         .open(&mut visible)
