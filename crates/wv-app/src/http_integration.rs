@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use crate::edit::editing::EditHistory;
 use crate::http::bridge::{
-    drain_messages_with, HttpBridge, HttpMessage, ScreenshotPayload, UiReply, UiRequest,
+    drain_messages_with_dirty, HttpBridge, HttpMessage, ScreenshotPayload, UiReply, UiRequest,
 };
 use crate::http::server::start_mcp_server;
 use crate::http::skills::ui;
@@ -364,6 +364,9 @@ pub fn drain_http_commands(
         ResMut<wv_render::state::DrillState>,
         Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     ),
+    // 地形贴图失效（ADR-0099）：HTTP 写命令不经过各编辑系统的 mark_dirty，
+    // 地形变了贴图不会自己跟——见 drain 后对 `terrain.bin` 脏路径的处理。
+    mut tex: ResMut<wv_render::terrain_view::TerrainTexture>,
 ) {
     // 把 save_dir 拷成 owned，先结束 `projection.project_dir` 的不可变借用，
     // 然后才能用 `&mut projection.world`（§3.3）。
@@ -417,7 +420,7 @@ pub fn drain_http_commands(
             let _ = reply_tx.send(reply);
         }
     };
-    let processed = drain_messages_with(
+    let (processed, dirty_paths) = drain_messages_with_dirty(
         &mut receiver.rx,
         &mut projection.world,
         &mut edit.history,
@@ -427,6 +430,15 @@ pub fn drain_http_commands(
     // 本帧处理过消息 = 有未落盘的编辑，点亮顶栏 `●`（与 GUI 编辑同语义）。
     if processed {
         projection.dirty = true;
+    }
+    // 地形落盘 → 让下一帧强制重建地形贴图（ADR-0099）。
+    //
+    // 判据：脏路径里出现 `maps/<id>/terrain.bin`（地形三命令与切蛋糕写出的
+    // 就是这个）。`force_rebuild` 只清 `last_mode/last_map` 缓存键、不直接
+    // 画图——真正的重建仍由 `rebuild_texture_on_mode_change` 在下一帧做，
+    // 与 GUI「强制重画地形」命令同一条通路。
+    if dirty_paths.iter().any(|p| p.ends_with("/terrain.bin")) {
+        wv_render::terrain_view::force_rebuild(&mut tex);
     }
 
     // 地图导航 / 缩放（ADR-0096 追记）——在 drain 之后，此时 `&projection.world`

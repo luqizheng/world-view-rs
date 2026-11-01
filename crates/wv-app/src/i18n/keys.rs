@@ -824,6 +824,10 @@ pub enum I18nKey {
     PoiKindPortal,
     /// 类别：险地
     PoiKindDanger,
+    /// 类别：要塞（ADR-0099）
+    PoiKindFortress,
+    /// 类别：营地（ADR-0099）
+    PoiKindCamp,
     /// CellMap 编辑 dialog 标题（ADR-0097）
     CellDlgTitle,
     /// 页签：群系（命名物化）
@@ -1689,7 +1693,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 719] = [
+    pub const ALL: [I18nKey; 721] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -2081,6 +2085,8 @@ impl I18nKey {
         I18nKey::PoiKindShrine,
         I18nKey::PoiKindPortal,
         I18nKey::PoiKindDanger,
+        I18nKey::PoiKindFortress,
+        I18nKey::PoiKindCamp,
         I18nKey::CellDlgTitle,
         I18nKey::CellDlgTabBiome,
         I18nKey::CellDlgTabPoi,

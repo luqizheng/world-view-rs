@@ -9,7 +9,7 @@
 # 在 Startup 起了 tokio 线程、axum 是否真的绑上端口、curl 是否真能调通。
 #
 # 本脚本补最低保证：**启动 GUI → 真实 curl POST /mcp → tools/list 返全部
-# skill（现 15 个，ADR-0078 十三 + ADR-0082 二）→ tools/call list_maps /
+# skill（现 26 个，ADR-0078/0082/0096/0099 叠加）→ tools/call list_maps /
 # set_view_mode / screenshot 走通**。
 #
 # ## 用法
@@ -82,8 +82,8 @@ if [ "$READY" != "yes" ]; then
 fi
 echo "[smoke] 端口 ${PORT} 已就绪"
 
-# ① tools/list：应返 15 个 skill，顺序与 ADR-0014 §2.5 + ADR-0078 + ADR-0082
-# （自然区命名两接口 2026-10-28 追加；当时单测已更 15、本脚本漏更致假红）一致。
+# ① tools/list：应返 26 个 skill，顺序与 ADR-0014 §2.5 + ADR-0078 + ADR-0082 +
+# ADR-0096 + ADR-0099（地形/势力/改点六条与 list_factions）一致。
 TOOLS_JSON=$(curl -s --max-time 5 "$URL" -X POST \
     -H 'content-type: application/json' \
     -d '{"jsonrpc":"2.0","method":"tools/list","id":1}')
@@ -93,16 +93,19 @@ r = json.load(sys.stdin)
 tools = r['result']['tools']
 names = [t['name'] for t in tools]
 expected = ['list_maps','get_map','list_places','get_place','get_state_at_time',
-            'get_naming_context',
-            'create_map','create_place','undo','save_project',
-            'set_nature_names',
-            'get_ui_state','set_view_mode','set_panel_visible','screenshot']
+            'get_naming_context','list_factions',
+            'create_map','generate_continent','paint_terrain_intent',
+            'create_faction','divide_faction',
+            'create_place','update_place','set_place_kind',
+            'undo','save_project','set_nature_names',
+            'get_ui_state','set_view_mode','set_panel_visible',
+            'enqueue_ui_input','set_map_tool','set_current_map','set_zoom','screenshot']
 assert names == expected, f'skill 列表/顺序错: {names}'
 assert all(t['inputSchema']['type'] == 'object' for t in tools), 'inputSchema.type != object'
 print(len(names))
 ")
-if [ "$NAMES" = "15" ]; then
-    echo "[smoke] PASS ①: tools/list 返 15 个 skill，顺序正确"
+if [ "$NAMES" = "26" ]; then
+    echo "[smoke] PASS ①: tools/list 返 26 个 skill，顺序正确"
 else
     echo "[smoke] FAIL ①: tools/list 异常："
     echo "$TOOLS_JSON" | head -3
@@ -123,6 +126,27 @@ if [ "$IS_ERR" = "False" ]; then
 else
     echo "[smoke] FAIL ②: tools/call list_maps 异常："
     echo "$CALL_JSON" | head -3
+    FAIL=1
+fi
+
+# ②b tools/call list_factions（ADR-0099 新读面）：return array，isError=false。
+FAC_JSON=$(curl -s --max-time 5 "$URL" -X POST \
+    -H 'content-type: application/json' \
+    -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"list_factions","arguments":{}},"id":20}')
+FAC_OK=$(echo "$FAC_JSON" | python3 -c "
+import json,sys
+r = json.load(sys.stdin)
+res = r['result']
+assert res['isError'] is False, res
+payload = json.loads(res['content'][0]['text'])
+assert isinstance(payload, list), f'list_factions 应回数组，实得 {type(payload)}'
+print('ok')
+")
+if [ "$FAC_OK" = "ok" ]; then
+    echo "[smoke] PASS ②b: tools/call list_factions 走通（数组回执）"
+else
+    echo "[smoke] FAIL ②b: tools/call list_factions 异常："
+    echo "$FAC_JSON" | head -3
     FAIL=1
 fi
 
@@ -212,6 +236,6 @@ else
 fi
 
 if [ "$FAIL" = "0" ]; then
-    echo "[smoke] PASS: MCP server 真机链路（TCP 绑定 + HTTP 解析 + 13 skill + 读路径 + UI 操控 + 截图回传 + 错误路径）全通"
+    echo "[smoke] PASS: MCP server 真机链路（TCP 绑定 + HTTP 解析 + 26 skill + 读路径 + 势力读面 + UI 操控 + 截图回传 + 错误路径）全通"
 fi
 exit "$FAIL"

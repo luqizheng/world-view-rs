@@ -295,8 +295,8 @@ mod tests {
         let tools = resp["result"]["tools"].as_array().unwrap();
         assert_eq!(
             tools.len(),
-            19,
-            "应暴露 19 个 skill（9 数据 + 8 UI + 2 命名；ADR-0096 增合成输入/切工具/切图/缩放）"
+            26,
+            "应暴露 26 个 skill（读 7 + 写 11 + UI 8；ADR-0099 增地形/势力/改点六条与 list_factions）"
         );
 
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -309,8 +309,15 @@ mod tests {
                 "get_place",
                 "get_state_at_time",
                 "get_naming_context",
+                "list_factions",
                 "create_map",
+                "generate_continent",
+                "paint_terrain_intent",
+                "create_faction",
+                "divide_faction",
                 "create_place",
+                "update_place",
+                "set_place_kind",
                 "undo",
                 "save_project",
                 "set_nature_names",
@@ -492,7 +499,7 @@ mod tests {
         assert!(resp.result.is_some());
         assert!(resp.error.is_none());
         let tools = resp.result.unwrap()["tools"].as_array().unwrap().clone();
-        assert_eq!(tools.len(), 19);
+        assert_eq!(tools.len(), 26);
     }
 
     #[test]

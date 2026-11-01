@@ -191,12 +191,23 @@ pub enum PoiKind {
     Portal,
     /// 险地 / 龙巢 / 禁区。
     Danger,
+    /// 要塞 / 堡垒 / 关口（ADR-0099）：有驻军、能出战报的军事节点。
+    ///
+    /// 与 [`Self::Settlement`] 分开的理由：世界地图上「城市」与「要塞」是
+    /// 两种不同的一等节点（前者给钱、后者给名），混为一类会让图例与点标
+    /// 失去区分度——见 `07-geography-and-nodes.md` §6.1 的关键不对称。
+    Fortress,
+    /// 营地 / 临时聚落（ADR-0099）：游牧、远征、季节性的驻地。
+    ///
+    /// 与 [`Self::Settlement`] 分开的理由同 [`Self::Fortress`]：营地在
+    /// 世界地图上「会动」，是另一种语义的一等节点。
+    Camp,
 }
 
 impl PoiKind {
     /// 全部类别（声明序）。渲染层的材质 / 批次表按 [`Self::index`] 索引，
     /// 新增类别只需在这里追加 + 给配色。
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 19] = [
         Self::Other,
         Self::Settlement,
         Self::Peak,
@@ -214,6 +225,8 @@ impl PoiKind {
         Self::Shrine,
         Self::Portal,
         Self::Danger,
+        Self::Fortress,
+        Self::Camp,
     ];
 
     /// 类别总数（= [`Self::ALL`] 长度，编译期一致）。
@@ -249,6 +262,8 @@ impl PoiKind {
             Self::Shrine => "shrine",
             Self::Portal => "portal",
             Self::Danger => "danger",
+            Self::Fortress => "fortress",
+            Self::Camp => "camp",
         }
     }
 }
@@ -949,13 +964,20 @@ mod tests {
             PoiKind::Education,
             PoiKind::Government,
             PoiKind::Shop,
+            PoiKind::Ruins,
+            PoiKind::Arena,
+            PoiKind::Shrine,
+            PoiKind::Portal,
+            PoiKind::Danger,
+            PoiKind::Fortress,
+            PoiKind::Camp,
         ];
         for k in all {
             let yaml = serde_yaml::to_string(&k).expect("PoiKind 应可序列化");
             assert_eq!(yaml.trim(), k.key(), "{k:?} 的 serde 拼写与 key() 不一致");
         }
         assert_eq!(PoiKind::default(), PoiKind::Other, "缺省应为未分类");
-        assert_eq!(PoiKind::COUNT, 17);
+        assert_eq!(PoiKind::COUNT, 19);
         for (i, k) in PoiKind::ALL.iter().enumerate() {
             assert_eq!(k.index(), i, "{k:?} 的 index 应等于声明序");
         }

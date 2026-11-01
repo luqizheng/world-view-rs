@@ -283,6 +283,10 @@ pub const GOOGLE_POI_SHRINE: Color = hex(0x455A64);
 pub const GOOGLE_POI_PORTAL: Color = hex(0x7E57C2);
 /// 险地（ADR-0093）：暗红。
 pub const GOOGLE_POI_DANGER: Color = hex(0x8B0000);
+/// 要塞 / 堡垒 / 关口（ADR-0099）：深灰蓝——军事节点的冷硬感，与聚落红点区分。
+pub const GOOGLE_POI_FORTRESS: Color = hex(0x37474F);
+/// 营地 / 临时聚落（ADR-0099）：土黄——「会动的驻地」，比聚落弱一档。
+pub const GOOGLE_POI_CAMP: Color = hex(0x9E7B2E);
 
 /// 兼容旧调用的淡化目标色；Google 模式实际会忽略淡化开关，避免洗掉水色。
 pub const GOOGLE_SOFTEN_TOWARD: Color = hex(0xF7F5F0);

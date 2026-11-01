@@ -1,7 +1,7 @@
 //! `tools/list` 聚合点 + `tools/call` 路由。
 //!
 //! ## 顺序约定
-//! 所有 19 个 skill 在 [`all_tools`] 中按「先读后写再 UI」排列；`tools/list`
+//! 所有 26 个 skill 在 [`all_tools`] 中按「先读后写再 UI」排列；`tools/list`
 //! 直接返回这个序列——LLM 客户端看到稳定的 schema 顺序，方便对齐 prompt 缓存。
 //!
 //! ## dispatch
@@ -29,9 +29,9 @@ pub enum ToolOutput {
     },
 }
 
-/// 全部 19 个 skill 的 schema 描述（用于 `tools/list`）。
+/// 全部 26 个 skill 的 schema 描述（用于 `tools/list`）。
 pub fn all_tools() -> Vec<ToolDef> {
-    let mut out: Vec<ToolDef> = Vec::with_capacity(19);
+    let mut out: Vec<ToolDef> = Vec::with_capacity(26);
     for (name, desc, schema) in skills::read_tool_schemas() {
         out.push(ToolDef {
             name,
@@ -112,11 +112,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_tools_exposes_exactly_nineteen_skills_in_stable_order() {
+    fn all_tools_exposes_exactly_twenty_six_skills_in_stable_order() {
         let tools = all_tools();
-        assert_eq!(tools.len(), 19);
+        assert_eq!(tools.len(), 26);
         let names: Vec<&str> = tools.iter().map(|t| t.name).collect();
-        // 顺序：先 5 个读，再 4 个写，再 4 个 UI 操控（ADR-0078），末尾 2 个命名（ADR-0082）
+        // 顺序：读 6（含 ADR-0099 的 list_factions）→ 写 11（ADR-0099 加六条）
+        // → UI 操控 4（ADR-0078）→ 命名 2（ADR-0082）→ 截图。
         assert_eq!(
             names,
             vec![
@@ -126,8 +127,15 @@ mod tests {
                 "get_place",
                 "get_state_at_time",
                 "get_naming_context",
+                "list_factions",
                 "create_map",
+                "generate_continent",
+                "paint_terrain_intent",
+                "create_faction",
+                "divide_faction",
                 "create_place",
+                "update_place",
+                "set_place_kind",
                 "undo",
                 "save_project",
                 "set_nature_names",
@@ -147,7 +155,7 @@ mod tests {
     fn list_tools_result_matches_mcp_shape() {
         let v = list_tools_result();
         let arr = v["tools"].as_array().expect("tools 必为 array");
-        assert_eq!(arr.len(), 19);
+        assert_eq!(arr.len(), 26);
         // MCP `2025-03-26` 的 tool 定义 schema 字段叫 `inputSchema`（驼峰）。
         for t in arr {
             assert!(t["name"].is_string());

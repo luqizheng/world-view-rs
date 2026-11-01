@@ -21,13 +21,43 @@ pub fn write_tool_schemas() -> Vec<(&'static str, &'static str, Value)> {
     vec![
         (
             "create_map",
-            "新建一张地图（MapNode 节点 + 父引用回填）。v0.1 不带预填充栅格（地形走后续 skill）。",
+            "新建一张地图（MapNode 节点 + 父引用回填）。level=world 且给 cell_size 时预填全海栅格（地形工具的前提，ADR-0099）；省略 cell_size = 不带栅格。",
             create_map_schema(),
+        ),
+        (
+            "generate_continent",
+            "大陆生成（ADR-0099）：按意图包络跑海岸线/起伏/森林荒漠/大陆架/离岸小岛。要求目标图已有栅格（create_map 时给 cell_size 即可）。",
+            generate_continent_schema(),
+        ),
+        (
+            "paint_terrain_intent",
+            "地形意图（ADR-0099）：山脉 / 高原 / 丘陵 / 火山 / 湖 / 河，点状或区域一次生效。位置用图内局部 wu。",
+            paint_terrain_intent_schema(),
+        ),
+        (
+            "create_faction",
+            "新增势力（ADR-0099）：id / name / color(#RRGGBB) / 可选 rank / seat / layer。已有同 ID 会报错，先 list_factions。",
+            create_faction_schema(),
+        ),
+        (
+            "divide_faction",
+            "按意图多边形切出势力领土（ADR-0099，「切蛋糕」）：host=被切的宿主势力（null=空白地），mode=snap（吸附水陆/河/山脊）或 straight。回执带 snapped 标志表明是否真的吸附到地物。",
+            divide_faction_schema(),
         ),
         (
             "create_place",
             "新增一个地点（Place：id / name / 可选 map / 可选 x,y 可选 / w,h）。",
             create_place_schema(),
+        ),
+        (
+            "update_place",
+            "改地点的名称 / 呈现级别 / 坐标（ADR-0099）。只改名/级别时不必带坐标。",
+            update_place_schema(),
+        ),
+        (
+            "set_place_kind",
+            "改地点的 POI 类别（ADR-0099）；kind=null 清空。适用于把占位类别转正。",
+            set_place_kind_schema(),
         ),
         (
             "undo",
@@ -81,7 +111,11 @@ pub fn create_map_schema() -> Value {
             "level": {"type": "string", "enum": ["world", "region", "city", "interior"], "description": "层级"},
             "parent": {"type": "string", "description": "父图 ID；根图为 null"},
             "size_w": {"type": "number", "description": "extent 宽度"},
-            "size_h": {"type": "number", "description": "extent 高度"}
+            "size_h": {"type": "number", "description": "extent 高度"},
+            "cell_size": {
+                "type": "number",
+                "description": "每格世界单位（ADR-0099）。level=world 时给出 → 按 size/cell_size 铺全海栅格（地形/切蛋糕工具的前提，见 generate_continent）；省略 = 不带栅格（沿用父图底图或后续由 GUI 铺底）。此值被栅格尺寸钉死，后续地形调用的 cell_size 必须与之一致"
+            }
         },
         "required": ["id", "name", "level", "size_w", "size_h"],
         "additionalProperties": false
@@ -115,6 +149,168 @@ pub fn create_place_schema() -> Value {
     })
 }
 
+/// `[[x, y], ...]` 点列的公共 schema 片段（图内局部 wu）。
+fn points_schema(min_items: usize) -> Value {
+    json!({
+        "type": "array",
+        "minItems": min_items,
+        "items": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {"type": "number"}
+        }
+    })
+}
+
+pub fn generate_continent_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["map_id", "envelopes", "cell_size", "seed"],
+        "properties": {
+            "map_id": {"type": "string", "description": "目标地图 ID（须已有栅格）"},
+            "envelopes": {
+                "type": "array",
+                "description": "大陆包络（每条 ≥3 点；图内局部 wu）。多圈 = 多块陆地",
+                "minItems": 1,
+                "items": points_schema(3)
+            },
+            "cell_size": {"type": "number", "description": "每格世界单位；必须与 create_map 时给的一致"},
+            "seed": {"type": "integer", "description": "骰子种子；换值 = 换一份岸线细节"},
+            "params": {
+                "type": "object",
+                "description": "大陆配方（ADR-0008 八参数）；省略 = 缺省值",
+                "properties": {
+                    "coast_wiggle": {"type": "number", "description": "海岸蜿蜒度 0–1（0=贴多边形边）"},
+                    "coast_octaves": {"type": "integer", "description": "海岸细节 fBm octaves（2/4/6）"},
+                    "relief": {"type": "string", "enum": ["hills", "mountains", "high_mountains"], "description": "起伏强度档"},
+                    "forest_cover": {"type": "number", "description": "森林覆盖倾向 0–1"},
+                    "desert_cover": {"type": "number", "description": "荒漠覆盖倾向 0–1"},
+                    "shelf_cells": {"type": "integer", "description": "大陆架宽度（格）"},
+                    "islands": {"type": "string", "enum": ["off", "low", "medium", "high"], "description": "离岸小岛档"}
+                },
+                "additionalProperties": false
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+pub fn paint_terrain_intent_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["map_id", "intent", "cell_size"],
+        "properties": {
+            "map_id": {"type": "string", "description": "目标地图 ID（须已有栅格）"},
+            "cell_size": {"type": "number", "description": "每格世界单位；须与建图时一致"},
+            "intent": {
+                "type": "object",
+                "required": ["kind"],
+                "description": "地形意图；字段按 kind 取（点状用 center，线状用 pts，区域用 polygon）",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": [
+                            "mountain_range", "plateau", "hills", "volcano", "lake", "river",
+                            "mountain_massif", "hills_region", "plains_region", "lake_region"
+                        ],
+                        "description": "mountain_range/river 用 pts；volcano/lake 用 center；*_region / mountain_massif 用 polygon"
+                    },
+                    "pts": points_schema(1),
+                    "polygon": points_schema(3),
+                    "center": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}},
+                    "radius": {"type": "number", "description": "半宽（世界单位）"},
+                    "strength": {"type": "number", "description": "强度：山脉/火山 [0.2,2.0]；高原/丘陵/湖 同义缩放"}
+                },
+                "additionalProperties": false
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+pub fn create_faction_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["faction"],
+        "properties": {
+            "faction": {
+                "type": "object",
+                "required": ["id", "name", "color"],
+                "properties": {
+                    "id": {"type": "string", "description": "势力 ID（§4.4）"},
+                    "name": {"type": "string", "description": "显示名"},
+                    "color": {"type": "string", "description": "势力色 #RRGGBB"},
+                    "rank": {"type": "string", "description": "渲染提示（kingdom / tribe / free_city …；自由串）"},
+                    "seat": {"type": "string", "description": "首府 Place ID（可选）"},
+                    "layer": {"type": "string", "description": "所属势力层 ID（可选；省略=默认层）"}
+                },
+                "additionalProperties": false
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+pub fn divide_faction_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["map_id", "intent", "mode", "faction", "cell_size"],
+        "properties": {
+            "map_id": {"type": "string", "description": "目标地图 ID（须已有栅格）"},
+            "host": {"type": ["string", "null"], "description": "被切的宿主势力 ID；null = 从空白地切"},
+            "intent": points_schema(3),
+            "mode": {"type": "string", "enum": ["snap", "straight"], "description": "snap=边界吸附水陆/河/山脊；straight=保留平滑边框"},
+            "faction": {
+                "type": "object",
+                "required": ["id", "name", "color"],
+                "properties": {
+                    "id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "color": {"type": "string", "description": "#RRGGBB"},
+                    "rank": {"type": "string"},
+                    "seat": {"type": "string"},
+                    "layer": {"type": "string"}
+                },
+                "additionalProperties": false
+            },
+            "from": {"type": "integer", "description": "生效日（TimeSpan::from）；省略 = 0"},
+            "cell_size": {"type": "number", "description": "每格世界单位；须与建图时一致"}
+        },
+        "additionalProperties": false
+    })
+}
+
+pub fn update_place_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["place_id"],
+        "properties": {
+            "place_id": {"type": "string", "description": "目标地点 ID"},
+            "name": {"type": "string", "description": "新名称（省略 = 不改）"},
+            "rank": {"type": "integer", "minimum": 0, "maximum": 3, "description": "新呈现级别（省略 = 不改）"},
+            "x": {"type": "number", "description": "新锚点 X（省略 = 不改）"},
+            "y": {"type": "number", "description": "新锚点 Y（省略 = 不改）"}
+        },
+        "additionalProperties": false
+    })
+}
+
+pub fn set_place_kind_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["place_id", "kind"],
+        "properties": {
+            "place_id": {"type": "string", "description": "目标地点 ID"},
+            "kind": {
+                "type": ["string", "null"],
+                "description": "新类别（PoiKind 词表，见 create_place 的 kind 说明）；null = 清空"
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
 pub fn undo_schema() -> Value {
     json!({
         "type": "object",
@@ -141,6 +337,9 @@ struct CreateMapInput {
     parent: Option<String>,
     size_w: f32,
     size_h: f32,
+    /// 每格世界单位；`level == "world"` 时给出即预填充全海栅格（ADR-0099）。
+    #[serde(default)]
+    cell_size: Option<f32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -174,6 +373,118 @@ struct UndoInput {}
 #[serde(deny_unknown_fields)]
 struct SaveProjectInput {}
 
+/// 大陆配方入参（全部可选；未给的取 [`wv_terrain::continent::ContinentParams`] 缺省）。
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ContinentParamsInput {
+    #[serde(default)]
+    coast_wiggle: Option<f32>,
+    #[serde(default)]
+    coast_octaves: Option<u32>,
+    #[serde(default)]
+    relief: Option<String>,
+    #[serde(default)]
+    forest_cover: Option<f32>,
+    #[serde(default)]
+    desert_cover: Option<f32>,
+    #[serde(default)]
+    shelf_cells: Option<u32>,
+    #[serde(default)]
+    islands: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GenerateContinentInput {
+    map_id: String,
+    envelopes: Vec<Vec<(f32, f32)>>,
+    cell_size: f32,
+    seed: u64,
+    #[serde(default)]
+    params: Option<ContinentParamsInput>,
+}
+
+/// 地形意图入参（按 `kind` 取不同字段；字段缺失在 handler 里报参数错）。
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TerrainIntentInput {
+    kind: String,
+    #[serde(default)]
+    pts: Option<Vec<(f32, f32)>>,
+    #[serde(default)]
+    polygon: Option<Vec<(f32, f32)>>,
+    #[serde(default)]
+    center: Option<(f32, f32)>,
+    #[serde(default)]
+    radius: Option<f32>,
+    #[serde(default)]
+    strength: Option<f32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PaintTerrainIntentInput {
+    map_id: String,
+    intent: TerrainIntentInput,
+    cell_size: f32,
+}
+
+/// 势力定义入参（create_faction 与 divide_faction 共用）。
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FactionInput {
+    id: String,
+    name: String,
+    color: String,
+    #[serde(default)]
+    rank: Option<String>,
+    #[serde(default)]
+    seat: Option<String>,
+    #[serde(default)]
+    layer: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateFactionInput {
+    faction: FactionInput,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DivideFactionInput {
+    map_id: String,
+    #[serde(default)]
+    host: Option<String>,
+    intent: Vec<(f32, f32)>,
+    mode: String,
+    faction: FactionInput,
+    #[serde(default)]
+    from: Option<i64>,
+    cell_size: f32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdatePlaceInput {
+    place_id: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    rank: Option<u8>,
+    #[serde(default)]
+    x: Option<f32>,
+    #[serde(default)]
+    y: Option<f32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetPlaceKindInput {
+    place_id: String,
+    kind: Option<String>,
+}
+
 /// 路由：写类 skill 的 dispatch。
 pub async fn dispatch_write(
     bridge: &HttpBridge,
@@ -195,6 +506,13 @@ pub async fn dispatch_write(
                 None => None,
             };
             let level = parse_level(&input.level)?;
+            if let Some(cs) = input.cell_size {
+                if !(cs.is_finite() && cs > 0.0) {
+                    return Err(JsonRpcError::invalid_params(format!(
+                        "cell_size 必须为正有限数：{cs}"
+                    )));
+                }
+            }
             let node = wv_core::map::MapNode {
                 id: id.clone(),
                 comment: None,
@@ -218,7 +536,43 @@ pub async fn dispatch_write(
                 trashed: false,
                 trashed_at: None,
             };
-            // v0.1 不带预填充栅格；地形由后续 skill 单独填。
+            // 世界图预填海洋栅格（ADR-0099）：地形三命令与切蛋糕都要求
+            // `terrain_of(map).is_some()`，HTTP 建图若不带栅格，后续
+            // `generate_continent` / `paint_terrain_intent` / `divide_faction`
+            // 会一律 hard-fail（builder check 问题 1）。
+            //
+            // 口径与 GUI「新建地图」一致（`new_map_dialog.rs:542`）：只对
+            // `level == world` 预填，且**仅在调用方给了 cell_size 时**——
+            // 不给 = 保持旧行为（不带栅格），不破既有调用方。
+            let prefill = match (level, input.cell_size) {
+                (wv_core::map::MapLevel::World, Some(cs)) => {
+                    Some((cs, wv_core::map::MapBase::Ocean))
+                }
+                _ => None,
+            };
+            if let Some((cs, base)) = prefill {
+                let w = ((input.size_w / cs).round() as u32).max(1);
+                let h = ((input.size_h / cs).round() as u32).max(1);
+                let cell = base.cell();
+                let terrain = wv_core::terrain::TerrainData {
+                    width: w,
+                    height: h,
+                    cells: vec![cell; (w as usize) * (h as usize)],
+                };
+                let mut node = node;
+                node.base = Some(base);
+                let cmd: Box<dyn wv_edit::EditCommand> =
+                    Box::new(wv_edit::AddMapCommand::new(node, Some(terrain)));
+                let dirty = bridge.apply(cmd).await.map_err(|e| {
+                    JsonRpcError::internal_error(format!("create_map apply 失败: {e}"))
+                })?;
+                return Ok(json!({
+                    "id": input.id,
+                    "grid": {"width": w, "height": h, "cell_size": cs},
+                    "dirty_paths": dirty,
+                }));
+            }
+            // 不带栅格：沿用父图底图（既有行为）。
             let cmd: Box<dyn wv_edit::EditCommand> =
                 Box::new(wv_edit::AddMapCommand::new(node, None));
             let dirty = bridge
@@ -227,6 +581,199 @@ pub async fn dispatch_write(
                 .map_err(|e| JsonRpcError::internal_error(format!("create_map apply 失败: {e}")))?;
             Ok(json!({
                 "id": input.id,
+                "dirty_paths": dirty,
+            }))
+        }
+        "generate_continent" => {
+            let input: GenerateContinentInput = serde_json::from_value(args)
+                .map_err(|e| JsonRpcError::invalid_params(format!("generate_continent: {e}")))?;
+            let map = wv_core::Id::new(&input.map_id)
+                .map_err(|e| JsonRpcError::invalid_params(format!("map_id 非法: {e}")))?;
+            if !(input.cell_size.is_finite() && input.cell_size > 0.0) {
+                return Err(JsonRpcError::invalid_params(format!(
+                    "cell_size 必须为正有限数：{}",
+                    input.cell_size
+                )));
+            }
+            let params = match input.params {
+                None => wv_terrain::continent::ContinentParams::default(),
+                Some(p) => {
+                    let d = wv_terrain::continent::ContinentParams::default();
+                    wv_terrain::continent::ContinentParams {
+                        coast_wiggle: p.coast_wiggle.unwrap_or(d.coast_wiggle),
+                        coast_octaves: p.coast_octaves.unwrap_or(d.coast_octaves),
+                        relief: match p.relief.as_deref() {
+                            None => d.relief,
+                            Some(s) => parse_relief(s)?,
+                        },
+                        forest_cover: p.forest_cover.unwrap_or(d.forest_cover),
+                        desert_cover: p.desert_cover.unwrap_or(d.desert_cover),
+                        shelf_cells: p.shelf_cells.unwrap_or(d.shelf_cells),
+                        islands: match p.islands.as_deref() {
+                            None => d.islands,
+                            Some(s) => parse_islands(s)?,
+                        },
+                    }
+                }
+            };
+            let cmd = wv_edit::GenerateContinentCommand::new(
+                map,
+                input.envelopes,
+                params,
+                input.seed,
+                input.cell_size,
+            );
+            let dirty = bridge.apply(Box::new(cmd)).await.map_err(|e| {
+                JsonRpcError::internal_error(format!("generate_continent 失败: {e}"))
+            })?;
+            Ok(json!({
+                "generated": true,
+                "dirty_paths": dirty,
+            }))
+        }
+        "paint_terrain_intent" => {
+            let input: PaintTerrainIntentInput = serde_json::from_value(args)
+                .map_err(|e| JsonRpcError::invalid_params(format!("paint_terrain_intent: {e}")))?;
+            let map = wv_core::Id::new(&input.map_id)
+                .map_err(|e| JsonRpcError::invalid_params(format!("map_id 非法: {e}")))?;
+            if !(input.cell_size.is_finite() && input.cell_size > 0.0) {
+                return Err(JsonRpcError::invalid_params(format!(
+                    "cell_size 必须为正有限数：{}",
+                    input.cell_size
+                )));
+            }
+            let intent = build_intent(&input.intent)?;
+            let cmd = wv_edit::IntentTerrainCommand::new(map, intent, input.cell_size);
+            let dirty = bridge.apply(Box::new(cmd)).await.map_err(|e| {
+                JsonRpcError::internal_error(format!("paint_terrain_intent 失败: {e}"))
+            })?;
+            Ok(json!({
+                "painted": true,
+                "dirty_paths": dirty,
+            }))
+        }
+        "create_faction" => {
+            let input: CreateFactionInput = serde_json::from_value(args)
+                .map_err(|e| JsonRpcError::invalid_params(format!("create_faction: {e}")))?;
+            let faction = build_faction(&input.faction)?;
+            let id = faction.id.to_string();
+            let cmd = wv_edit::AddFactionCommand::new(faction);
+            let dirty = bridge
+                .apply(Box::new(cmd))
+                .await
+                .map_err(|e| JsonRpcError::internal_error(format!("create_faction 失败: {e}")))?;
+            Ok(json!({
+                "id": id,
+                "dirty_paths": dirty,
+            }))
+        }
+        "divide_faction" => {
+            let input: DivideFactionInput = serde_json::from_value(args)
+                .map_err(|e| JsonRpcError::invalid_params(format!("divide_faction: {e}")))?;
+            let map = wv_core::Id::new(&input.map_id)
+                .map_err(|e| JsonRpcError::invalid_params(format!("map_id 非法: {e}")))?;
+            let host = match input.host.as_deref() {
+                Some(s) => Some(
+                    wv_core::Id::new(s)
+                        .map_err(|e| JsonRpcError::invalid_params(format!("host 非法: {e}")))?,
+                ),
+                None => None,
+            };
+            if !(input.cell_size.is_finite() && input.cell_size > 0.0) {
+                return Err(JsonRpcError::invalid_params(format!(
+                    "cell_size 必须为正有限数：{}",
+                    input.cell_size
+                )));
+            }
+            let mode = match input.mode.as_str() {
+                "snap" => wv_edit::DivisionMode::Snap,
+                "straight" => wv_edit::DivisionMode::Straight,
+                other => {
+                    return Err(JsonRpcError::invalid_params(format!(
+                        "mode 未知：`{other}`；仅 snap / straight"
+                    )))
+                }
+            };
+            let faction = build_faction(&input.faction)?;
+            let id = faction.id.to_string();
+            let cmd = wv_edit::DivideFactionCommand::new(
+                map,
+                host,
+                input.intent,
+                mode,
+                faction,
+                input.from.unwrap_or(0),
+                input.cell_size,
+            );
+            let snapped = cmd.snapped_flag();
+            let dirty = bridge
+                .apply(Box::new(cmd))
+                .await
+                .map_err(|e| JsonRpcError::internal_error(format!("divide_faction 失败: {e}")))?;
+            let snapped = snapped.lock().map(|v| *v).unwrap_or(false);
+            Ok(json!({
+                "id": id,
+                "snapped": snapped,
+                "dirty_paths": dirty,
+            }))
+        }
+        "update_place" => {
+            let input: UpdatePlaceInput = serde_json::from_value(args)
+                .map_err(|e| JsonRpcError::invalid_params(format!("update_place: {e}")))?;
+            let id = wv_core::Id::new(&input.place_id)
+                .map_err(|e| JsonRpcError::invalid_params(format!("place_id 非法: {e}")))?;
+            if let Some(rank) = input.rank {
+                if rank > 3 {
+                    return Err(JsonRpcError::invalid_params(format!(
+                        "rank 越界：{rank}（合法 0..=3）"
+                    )));
+                }
+            }
+            // `UpdatePlaceCommand` 要求整名（无 partial 语义）——省略 name 时
+            // 先读当前值补上，让「只挪点」这类调用不必回传名字。
+            let name = match input.name {
+                Some(n) => n,
+                None => {
+                    let reply = bridge
+                        .read(crate::http::bridge::ReadRequest::GetPlace { id: id.clone() })
+                        .await;
+                    match reply {
+                        crate::http::bridge::ReadReply::Place(Some(p)) => p.name,
+                        _ => {
+                            return Err(JsonRpcError::invalid_params(format!(
+                                "place_not_found: {}",
+                                input.place_id
+                            )))
+                        }
+                    }
+                }
+            };
+            let cmd = wv_edit::UpdatePlaceCommand::new(id, name, input.rank, input.x, input.y);
+            let dirty = bridge
+                .apply(Box::new(cmd))
+                .await
+                .map_err(|e| JsonRpcError::internal_error(format!("update_place 失败: {e}")))?;
+            Ok(json!({
+                "id": input.place_id,
+                "dirty_paths": dirty,
+            }))
+        }
+        "set_place_kind" => {
+            let input: SetPlaceKindInput = serde_json::from_value(args)
+                .map_err(|e| JsonRpcError::invalid_params(format!("set_place_kind: {e}")))?;
+            let id = wv_core::Id::new(&input.place_id)
+                .map_err(|e| JsonRpcError::invalid_params(format!("place_id 非法: {e}")))?;
+            let kind = match input.kind.as_deref() {
+                None => None,
+                Some(raw) => Some(parse_poi_kind(raw)?),
+            };
+            let cmd = wv_edit::SetPlaceKindCommand::new(id, kind);
+            let dirty = bridge
+                .apply(Box::new(cmd))
+                .await
+                .map_err(|e| JsonRpcError::internal_error(format!("set_place_kind 失败: {e}")))?;
+            Ok(json!({
+                "id": input.place_id,
                 "dirty_paths": dirty,
             }))
         }
@@ -253,26 +800,7 @@ pub async fn dispatch_write(
             // 以为写对了（工具面是 AI 的输入面，拼错必须可见）。
             let kind = match input.kind.as_deref() {
                 None => None,
-                Some(raw) => {
-                    let norm = raw.trim().to_ascii_lowercase();
-                    match wv_core::distance::PoiKind::ALL
-                        .iter()
-                        .copied()
-                        .find(|k| k.key() == norm)
-                    {
-                        Some(k) => Some(k),
-                        None => {
-                            return Err(JsonRpcError::invalid_params(format!(
-                                "kind 非法：`{raw}`；词表：{}",
-                                wv_core::distance::PoiKind::ALL
-                                    .iter()
-                                    .map(|k| k.key())
-                                    .collect::<Vec<_>>()
-                                    .join(" / ")
-                            )))
-                        }
-                    }
-                }
+                Some(raw) => Some(parse_poi_kind(raw)?),
             };
             // 呈现级别上限 3（ADR-0047 词表：0..=3）。
             if let Some(rank) = input.rank {
@@ -369,6 +897,165 @@ pub async fn dispatch_write(
             }))
         }
         other => Err(JsonRpcError::method_not_found(other)),
+    }
+}
+
+/// `PoiKind` 词表解析（非法值显式报错——工具面是 AI 的输入面，拼错必须可见）。
+fn parse_poi_kind(raw: &str) -> Result<wv_core::distance::PoiKind, JsonRpcError> {
+    let norm = raw.trim().to_ascii_lowercase();
+    wv_core::distance::PoiKind::ALL
+        .iter()
+        .copied()
+        .find(|k| k.key() == norm)
+        .ok_or_else(|| {
+            JsonRpcError::invalid_params(format!(
+                "kind 非法：`{raw}`；词表：{}",
+                wv_core::distance::PoiKind::ALL
+                    .iter()
+                    .map(|k| k.key())
+                    .collect::<Vec<_>>()
+                    .join(" / ")
+            ))
+        })
+}
+
+fn parse_relief(s: &str) -> Result<wv_terrain::continent::ReliefLevel, JsonRpcError> {
+    use wv_terrain::continent::ReliefLevel;
+    match s {
+        "hills" => Ok(ReliefLevel::Hills),
+        "mountains" => Ok(ReliefLevel::Mountains),
+        "high_mountains" => Ok(ReliefLevel::HighMountains),
+        other => Err(JsonRpcError::invalid_params(format!(
+            "relief 未知：`{other}`；仅 hills / mountains / high_mountains"
+        ))),
+    }
+}
+
+fn parse_islands(s: &str) -> Result<wv_terrain::continent::IslandDensity, JsonRpcError> {
+    use wv_terrain::continent::IslandDensity;
+    match s {
+        "off" => Ok(IslandDensity::Off),
+        "low" => Ok(IslandDensity::Low),
+        "medium" => Ok(IslandDensity::Medium),
+        "high" => Ok(IslandDensity::High),
+        other => Err(JsonRpcError::invalid_params(format!(
+            "islands 未知：`{other}`；仅 off / low / medium / high"
+        ))),
+    }
+}
+
+/// 势力入参 → 领域模型（ADR-0099）。
+fn build_faction(input: &FactionInput) -> Result<wv_core::Faction, JsonRpcError> {
+    let id = wv_core::Id::new(&input.id)
+        .map_err(|e| JsonRpcError::invalid_params(format!("faction.id 非法: {e}")))?;
+    let seat = match input.seat.as_deref() {
+        Some(s) => Some(
+            wv_core::Id::new(s)
+                .map_err(|e| JsonRpcError::invalid_params(format!("faction.seat 非法: {e}")))?,
+        ),
+        None => None,
+    };
+    let layer = match input.layer.as_deref() {
+        Some(s) => Some(
+            wv_core::Id::new(s)
+                .map_err(|e| JsonRpcError::invalid_params(format!("faction.layer 非法: {e}")))?,
+        ),
+        None => None,
+    };
+    // 颜色是**自由串**（`Color` 是透明 String 包装，解析失败由渲染层回退，
+    // §7.5 V1 不阻止作者）——但显然写错的格式仍显式提示，避免静默变成默认色。
+    if wv_core::Color(input.color.clone()).to_rgb().is_none() {
+        return Err(JsonRpcError::invalid_params(format!(
+            "faction.color 无法解析为 #RRGGBB：`{}`",
+            input.color
+        )));
+    }
+    Ok(wv_core::Faction {
+        id,
+        name: input.name.clone(),
+        color: wv_core::Color(input.color.clone()),
+        layer,
+        rank: input.rank.clone(),
+        seat,
+        memberships: Vec::new(),
+    })
+}
+
+/// 地形意图入参 → [`wv_terrain::intent::Intent`]（按 kind 取字段，缺字段即参数错）。
+fn build_intent(input: &TerrainIntentInput) -> Result<wv_terrain::intent::Intent, JsonRpcError> {
+    use wv_terrain::intent::Intent;
+    let need_pts = || -> Result<Vec<(f32, f32)>, JsonRpcError> {
+        input
+            .pts
+            .clone()
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| JsonRpcError::invalid_params(format!("{} 需要 pts", input.kind)))
+    };
+    let need_polygon = || -> Result<Vec<(f32, f32)>, JsonRpcError> {
+        input
+            .polygon
+            .clone()
+            .filter(|v| v.len() >= 3)
+            .ok_or_else(|| {
+                JsonRpcError::invalid_params(format!("{} 需要 ≥3 点的 polygon", input.kind))
+            })
+    };
+    let need_center = || -> Result<(f32, f32), JsonRpcError> {
+        input
+            .center
+            .ok_or_else(|| JsonRpcError::invalid_params(format!("{} 需要 center", input.kind)))
+    };
+    let need_radius = || -> Result<f32, JsonRpcError> {
+        input
+            .radius
+            .ok_or_else(|| JsonRpcError::invalid_params(format!("{} 需要 radius", input.kind)))
+    };
+    let strength = input.strength.unwrap_or(1.0);
+    match input.kind.as_str() {
+        "mountain_range" => Ok(Intent::MountainRange {
+            pts: need_pts()?,
+            radius: need_radius()?,
+            strength,
+        }),
+        "plateau" => Ok(Intent::Plateau {
+            pts: need_pts()?,
+            radius: need_radius()?,
+            strength,
+        }),
+        "hills" => Ok(Intent::Hills {
+            pts: need_pts()?,
+            radius: need_radius()?,
+            strength,
+        }),
+        "volcano" => Ok(Intent::Volcano {
+            center: need_center()?,
+            radius: need_radius()?,
+            strength,
+        }),
+        "lake" => Ok(Intent::Lake {
+            center: need_center()?,
+            radius: need_radius()?,
+            strength,
+        }),
+        "river" => Ok(Intent::River {
+            pts: need_pts()?,
+            strength,
+        }),
+        "mountain_massif" => Ok(Intent::MountainMassif {
+            polygon: need_polygon()?,
+        }),
+        "hills_region" => Ok(Intent::HillsRegion {
+            polygon: need_polygon()?,
+        }),
+        "plains_region" => Ok(Intent::PlainsRegion {
+            polygon: need_polygon()?,
+        }),
+        "lake_region" => Ok(Intent::LakeRegion {
+            polygon: need_polygon()?,
+        }),
+        other => Err(JsonRpcError::invalid_params(format!(
+            "intent.kind 未知：`{other}`；见 paint_terrain_intent 的 schema 枚举"
+        ))),
     }
 }
 

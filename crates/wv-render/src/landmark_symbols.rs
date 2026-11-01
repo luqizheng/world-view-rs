@@ -227,7 +227,7 @@ mod tests {
         );
     }
 
-    /// 全部 17 类都有图形（PoiKind → glyph 映射完备性，ADR-0093）。
+    /// 全部类别都有图形（PoiKind → glyph 映射完备性，ADR-0093/0099）。
     #[test]
     fn every_poi_kind_has_a_glyph() {
         for kind in wv_core::distance::PoiKind::ALL {

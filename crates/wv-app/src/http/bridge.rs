@@ -146,6 +146,8 @@ pub enum ReadRequest {
     /// 自然区命名上下文（ADR-0082 LLM 命名）：工程备注 + 地图备注 + 该图
     /// 自然层的全部脸（id / 族 / 存名 / 派生名）——LLM 据此提案名字。
     NatureNamingContext { map_id: wv_core::Id },
+    /// 全局势力清单（ADR-0099）：增量更新的 diff 前提。
+    ListFactions,
 }
 
 /// 读请求的回执。读路径 1（read by request kind）——不允许直接返回 World，
@@ -173,6 +175,27 @@ pub enum ReadReply {
     StateAtTime(serde_json::Value),
     /// `get_naming_context` 的返回（ADR-0082）。
     NatureNamingContext(NatureNamingContext),
+    /// `list_factions` 的返回（ADR-0099）：全局势力摘要。
+    FactionSummaries(Vec<FactionSummary>),
+}
+
+/// `list_factions` 单条（ADR-0099）。
+///
+/// **为什么需要它**：`AddFactionCommand` / `DivideFactionCommand` 对重复 ID
+/// 硬失败，而 v1 覆盖语义是「按 ID 对齐增量更新」——agent 必须先能看见
+/// 工程里已有哪些势力，才谈得上 diff。没有这条读面，增量更新只能靠猜。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct FactionSummary {
+    pub id: wv_core::Id,
+    pub name: String,
+    /// 势力色（`#RRGGBB`）。
+    pub color: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rank: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seat: Option<wv_core::Id>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layer: Option<wv_core::Id>,
 }
 
 /// 自然区命名上下文（ADR-0082）：命名的**风格来源**（两级备注）+ 待命名的脸。
@@ -379,7 +402,25 @@ pub fn drain_messages_with(
     save_dir: Option<&Path>,
     ui: &mut dyn FnMut(UiRequest, tokio::sync::oneshot::Sender<UiReply>),
 ) -> bool {
+    drain_messages_with_dirty(receiver, world, history, save_dir, ui).0
+}
+
+/// 同 [`drain_messages_with`]，但把每个 apply/undo 事务产生的**脏路径**
+/// 一并返回（ADR-0099）：`(是否处理过消息, 脏路径集合)`。
+///
+/// **为什么需要脏路径**：HTTP 写命令落盘到 `World` 后，渲染侧的
+/// `TerrainTexture` 不会自己失效（GUI 路径由各编辑系统显式 `mark_dirty`）。
+/// 没有这层回执，`generate_continent` 之后 `screenshot` 拿到的仍是旧画面——
+/// 「每阶段截图复核」会说谎（builder check 问题 3）。
+pub fn drain_messages_with_dirty(
+    receiver: &mut tokio::sync::mpsc::UnboundedReceiver<HttpMessage>,
+    world: &mut World,
+    history: &mut History,
+    save_dir: Option<&Path>,
+    ui: &mut dyn FnMut(UiRequest, tokio::sync::oneshot::Sender<UiReply>),
+) -> (bool, Vec<String>) {
     let mut processed = false;
+    let mut dirty: Vec<String> = Vec::new();
     loop {
         match receiver.try_recv() {
             Ok(HttpMessage::Ui(req, reply)) => {
@@ -388,39 +429,55 @@ pub fn drain_messages_with(
             }
             Ok(msg) => {
                 processed = true;
-                handle_message(msg, world, history, save_dir);
+                dirty.extend(handle_message(msg, world, history, save_dir));
             }
             Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
             Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
         }
     }
-    processed
+    (processed, dirty)
 }
 
+/// 处理一条 World / UI 兜底消息；返回该消息产生的脏路径（ADR-0099）。
+///
+/// 脏路径只在 apply / undo 上有意义（Read / Save / UI 兜底返回空）——
+/// 它是「渲染侧资源该失效了」的信号，见 [`drain_messages_with_dirty`]。
 fn handle_message(
     msg: HttpMessage,
     world: &mut World,
     history: &mut History,
     save_dir: Option<&Path>,
-) {
+) -> Vec<String> {
     match msg {
         HttpMessage::Read(req, reply) => {
             let r = handle_read(&req, world);
             let _ = reply.send(r);
+            Vec::new()
         }
         HttpMessage::Apply(cmd, reply) => {
             let mut tx = wv_edit::Transaction::new();
             tx.push(cmd);
             let r = history.commit(world, tx);
+            let dirty = match &r {
+                Ok(paths) => paths.clone(),
+                Err(_) => Vec::new(),
+            };
             let _ = reply.send(r);
+            dirty
         }
         HttpMessage::Undo(reply) => {
             let r = history.undo(world);
+            let dirty = r
+                .as_ref()
+                .map(|(_, paths)| paths.clone())
+                .unwrap_or_default();
             let _ = reply.send(r);
+            dirty
         }
         HttpMessage::Save(reply) => {
             let r = handle_save(world, save_dir);
             let _ = reply.send(r);
+            Vec::new()
         }
         // 防御性兜底：drain_messages_with 会把 UI 消息截走才轮到 handle_message，
         // 这里理论上不可达；真到达（有人绕过 _with 直调）也不丢消息、不 panic。
@@ -429,6 +486,7 @@ fn handle_message(
                 "UI 桥未接入：handle_message 无 UI 状态（用 drain_messages_with / GUI 主帧）"
                     .into(),
             ));
+            Vec::new()
         }
     }
 }
@@ -463,6 +521,20 @@ fn handle_read(req: &ReadRequest, world: &World) -> ReadReply {
         ReadRequest::NatureNamingContext { map_id } => {
             ReadReply::NatureNamingContext(handle_naming_context(world, map_id))
         }
+        ReadRequest::ListFactions => ReadReply::FactionSummaries(
+            world
+                .factions
+                .iter()
+                .map(|f| FactionSummary {
+                    id: f.id.clone(),
+                    name: f.name.clone(),
+                    color: f.color.as_str().to_string(),
+                    rank: f.rank.clone(),
+                    seat: f.seat.clone(),
+                    layer: f.layer.clone(),
+                })
+                .collect(),
+        ),
     }
 }
 

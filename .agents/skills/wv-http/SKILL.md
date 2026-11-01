@@ -28,7 +28,7 @@ wv 是单机地图世界观编辑器。GUI 运行时在本机开一个 **JSON-RP
 没有 `initialize` / `ping`——不需要握手，直接 POST。
 
 ```bash
-# 列出全部 15 个工具（含各自的 inputSchema）
+# 列出全部 26 个工具（含各自的 inputSchema）
 curl -s http://127.0.0.1:8732/mcp \
   -H 'content-type: application/json' \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
@@ -43,12 +43,14 @@ curl -s http://127.0.0.1:8732/mcp \
 响应是标准 JSON-RPC 2.0：`result.content[0]` 为文本（`text`）或图片
 （`image`，`data` 为裸 base64 PNG，无 `data:` 前缀）。
 
-## 工具面（15 个）
+## 工具面（26 个）
 
 | 类 | 工具 | 用途 |
 |---|---|---|
-| 数据读 | `list_maps` `get_map` `list_places` `get_place` `get_state_at_time` | 查地图树 / 图层与 comment / 地点 / 某天投影 |
-| 数据写 | `create_map` `create_place` `undo` `save_project` | 建图 / 建点 / 撤销 / 保存（写操作落盘前记得 `save_project`） |
+| 数据读 | `list_maps` `get_map` `list_places` `get_place` `get_state_at_time` `list_factions` | 查地图树 / 图层与 comment / 地点 / 某天投影 / 势力清单 |
+| 地形（ADR-0099） | `generate_continent` `paint_terrain_intent` | 大陆生成（海岸线/起伏/森林荒漠/大陆架/小岛）；山脉高原丘陵火山湖河（点状或区域） |
+| 势力（ADR-0099） | `create_faction` `divide_faction` | 建势力；按意图多边形切领土（snap 吸附水陆/河/山脊） |
+| 数据写 | `create_map` `create_place` `update_place` `set_place_kind` `undo` `save_project` | 建图（world 级给 `cell_size` 即铺全海栅格）/ 建点 / 改点 / 改类别 / 撤销 / 保存 |
 | UI 操控 | `get_ui_state` `set_view_mode` `set_panel_visible` `screenshot` | UI 快照 / 切视图 / 开关面板 / 截图 |
 | 合成输入（ADR-0096） | `enqueue_ui_input` `set_map_tool` | 注入点击/抬起/Esc（世界坐标，每帧消费一个）；切地图工具 |
 | 地图导航（ADR-0096 追记） | `set_current_map` `set_zoom` | 钻入目标图（等价面包屑）；设定缩放（世界单位/屏幕像素） |
@@ -57,7 +59,9 @@ curl -s http://127.0.0.1:8732/mcp \
 - `set_view_mode` 词表：`browse` `map` `cellmap` `faction` `realterrain` `event` `coastline`。
 - `set_panel_visible` 词表 = UI 面板菜单里的面板名（snake_case，ADR-0095 后含 faction / situation 共 14 个）。
 - **自驱验收（ADR-0096）**：`enqueue_ui_input` 注入合成点击（世界坐标 = 根图帧；两次独立调用同坐标 down 即双击），`set_map_tool` 切工具（point-select / select-* / brush / edit-cell…），`set_current_map` 钻入目标图、`set_zoom` 定缩放——配合 `screenshot`（GPU 回读，被别的窗口挡住也不影响）即可全程无人值守验收。
-- `create_place` 支持 `kind`（PoiKind 词表：settlement/port/ruins…）与 `rank`（0..3，≥2 画图标钉），建点即可直接是「城市符号」而非裸点标。
+- `create_place` 支持 `kind`（PoiKind 词表：settlement / fortress / camp / port / ruins…共 19 类）与 `rank`（0..3，≥2 画图标钉），建点即可直接是「城市符号」而非裸点标。
+- **建世界的顺序（ADR-0099）**：`create_map`（`level=world` + `cell_size`）→ `generate_continent` → `paint_terrain_intent` → `create_faction` / `divide_faction` → 批量 `create_place`。**`cell_size` 在建图时被栅格尺寸钉死**，之后每次调用都要给同一个值。
+- 增量更新前先 `list_factions` + `list_places` 对齐 ID：`create_faction` / `divide_faction` 对重复 ID 会报错，v1 没有删除工具。
 - 各工具入参 schema 以 `tools/list` 返回为准（有 `additionalProperties: false`，别猜字段）。
 
 ## 省 token 的用法（本 skill 存在的理由）

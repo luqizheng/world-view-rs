@@ -1,9 +1,8 @@
 # Spec：设计文档直通世界地图（design-doc → worldmap）
 
-> 状态：**已裁定待执行**（2026-11-01 用户拍板「按照推荐执行」）。
+> 状态：**M1 已实施**（2026-11-01，分支 `feat/design-doc-worldmap`；ADR-0099 已接受）。
 > 配套技术设计：[2026-11-01-design-doc-to-worldmap-design.md](2026-11-01-design-doc-to-worldmap-design.md)。
-> 执行入口：用户说「执行」后，按 design §9 里程碑顺序动工；动工前先读
-> `AGENTS.md`（尤其 §13 先分支/worktree 后写码、§6 留痕纪律）。
+> 下一步：M0（零代码实测，用 monster 文档跑通建图链路）与 M2（manifest 固化）待做。
 
 ## 1. 意图（为什么做这件事）
 

@@ -49,7 +49,21 @@ pub fn read_tool_schemas() -> Vec<(&'static str, &'static str, Value)> {
             "取自然区命名上下文（ADR-0082）：工程备注 + 地图备注（命名的风格来源）+ 该图自然层全部脸（face_id / 族名 / 现名 / 派生名）。先把它展示给用户确认风格，再按风格提案名字并用 set_nature_names 写回。",
             get_naming_context_schema(),
         ),
+        (
+            "list_factions",
+            "列出工程中所有势力（id / name / color / rank / seat / layer）。增量更新前先查它：create_faction / divide_faction 对重复 ID 会报错。",
+            list_factions_schema(),
+        ),
     ]
+}
+
+/// 势力清单（ADR-0099）——无入参。
+pub fn list_factions_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false,
+    })
 }
 
 pub fn get_naming_context_schema() -> Value {
@@ -158,7 +172,11 @@ struct GetStateAtTimeInput {
     day: i64,
 }
 
-/// 路由：读类 skill 的 dispatch。`name` 必须命中 5 个之一；否则
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ListFactionsInput {}
+
+/// 路由：读类 skill 的 dispatch。`name` 必须命中读类之一；否则
 /// `Err(JsonRpcError::method_not_found)`。
 pub async fn dispatch_read(
     bridge: &HttpBridge,
@@ -275,6 +293,16 @@ pub async fn dispatch_read(
                 ReadReply::NatureNamingContext(ctx) => serde_json::to_value(&ctx)
                     .map_err(|e| JsonRpcError::internal_error(e.to_string()))?,
                 _ => unreachable!("NatureNamingContext 应回同名回执"),
+            })
+        }
+        "list_factions" => {
+            let _input: ListFactionsInput = serde_json::from_value(args)
+                .map_err(|e| JsonRpcError::invalid_params(format!("list_factions: {e}")))?;
+            let reply = bridge.read(ReadRequest::ListFactions).await;
+            Ok(match reply {
+                ReadReply::FactionSummaries(v) => serde_json::to_value(v)
+                    .map_err(|e| JsonRpcError::internal_error(e.to_string()))?,
+                _ => unreachable!("ListFactions 应回 FactionSummaries"),
             })
         }
         other => Err(JsonRpcError::method_not_found(other)),
