@@ -45,6 +45,11 @@ pub fn write_tool_schemas() -> Vec<(&'static str, &'static str, Value)> {
             divide_faction_schema(),
         ),
         (
+            "reset_terrain",
+            "把整张图的地形重置回它的底图（MapBase：缺省海洋），一条命令、可 undo。调地形配方时的重 roll 入口——重置后再 generate_continent 即可换一套岸线/起伏。",
+            reset_terrain_schema(),
+        ),
+        (
             "create_place",
             "新增一个地点（Place：id / name / 可选 map / 可选 x,y 可选 / w,h）。",
             create_place_schema(),
@@ -281,6 +286,18 @@ pub fn divide_faction_schema() -> Value {
     })
 }
 
+/// 重置地形到底图（ADR-0099 追记 B）。
+pub fn reset_terrain_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["map_id"],
+        "properties": {
+            "map_id": {"type": "string", "description": "目标地图 ID"}
+        },
+        "additionalProperties": false
+    })
+}
+
 pub fn update_place_schema() -> Value {
     json!({
         "type": "object",
@@ -485,6 +502,12 @@ struct SetPlaceKindInput {
     kind: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResetTerrainInput {
+    map_id: String,
+}
+
 /// 路由：写类 skill 的 dispatch。
 pub async fn dispatch_write(
     bridge: &HttpBridge,
@@ -628,6 +651,21 @@ pub async fn dispatch_write(
             })?;
             Ok(json!({
                 "generated": true,
+                "dirty_paths": dirty,
+            }))
+        }
+        "reset_terrain" => {
+            let input: ResetTerrainInput = serde_json::from_value(args)
+                .map_err(|e| JsonRpcError::invalid_params(format!("reset_terrain: {e}")))?;
+            let map = wv_core::Id::new(&input.map_id)
+                .map_err(|e| JsonRpcError::invalid_params(format!("map_id 非法: {e}")))?;
+            let cmd = wv_edit::ResetTerrainToBaseCommand::new(map);
+            let dirty = bridge
+                .apply(Box::new(cmd))
+                .await
+                .map_err(|e| JsonRpcError::internal_error(format!("reset_terrain 失败: {e}")))?;
+            Ok(json!({
+                "reset": true,
                 "dirty_paths": dirty,
             }))
         }

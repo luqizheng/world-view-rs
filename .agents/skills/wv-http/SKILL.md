@@ -28,7 +28,7 @@ wv 是单机地图世界观编辑器。GUI 运行时在本机开一个 **JSON-RP
 没有 `initialize` / `ping`——不需要握手，直接 POST。
 
 ```bash
-# 列出全部 26 个工具（含各自的 inputSchema）
+# 列出全部 27 个工具（含各自的 inputSchema）
 curl -s http://127.0.0.1:8732/mcp \
   -H 'content-type: application/json' \
   -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
@@ -43,12 +43,12 @@ curl -s http://127.0.0.1:8732/mcp \
 响应是标准 JSON-RPC 2.0：`result.content[0]` 为文本（`text`）或图片
 （`image`，`data` 为裸 base64 PNG，无 `data:` 前缀）。
 
-## 工具面（26 个）
+## 工具面（27 个）
 
 | 类 | 工具 | 用途 |
 |---|---|---|
 | 数据读 | `list_maps` `get_map` `list_places` `get_place` `get_state_at_time` `list_factions` | 查地图树 / 图层与 comment / 地点 / 某天投影 / 势力清单 |
-| 地形（ADR-0099） | `generate_continent` `paint_terrain_intent` | 大陆生成（海岸线/起伏/森林荒漠/大陆架/小岛）；山脉高原丘陵火山湖河（点状或区域） |
+| 地形（ADR-0099） | `generate_continent` `paint_terrain_intent` `reset_terrain` | 大陆生成（海岸线/起伏/森林荒漠/大陆架/小岛）；山脉高原丘陵火山湖河（点状或区域）；**重置回底图**（配方重 roll 入口，可 undo） |
 | 势力（ADR-0099） | `create_faction` `divide_faction` | 建势力；按意图多边形切领土（snap 吸附水陆/河/山脊） |
 | 数据写 | `create_map` `create_place` `update_place` `set_place_kind` `undo` `save_project` | 建图（world 级给 `cell_size` 即铺全海栅格）/ 建点 / 改点 / 改类别 / 撤销 / 保存 |
 | UI 操控 | `get_ui_state` `set_view_mode` `set_panel_visible` `screenshot` | UI 快照 / 切视图 / 开关面板 / 截图 |

@@ -113,6 +113,18 @@ paint_terrain_intent { map_id, cell_size, intent: { kind, … } }
 - **加法语义**：同一条山脊跑两次会继续增高——不要重复下发。
 - 地形改完立刻 `screenshot` 看一眼，再往下走。
 
+#### 觉得不好看就重 roll（推荐做法）
+
+```
+reset_terrain { map_id }            # 一条命令退回底图（海洋），可 undo
+generate_continent { …新的 params/seed/envelopes… }
+screenshot
+```
+
+`reset_terrain` 只动地形：**势力面与节点都留着**，所以调岸线/山形时可以反复
+「重置 → 重生成 → 看」，不用重建整张图。两三次不满意再考虑换包络形状
+（包络决定骨架，参数只决定细节——蛋形八成是包络太圆）。
+
 ### 4. 势力
 
 ```

@@ -9,7 +9,7 @@
 # 在 Startup 起了 tokio 线程、axum 是否真的绑上端口、curl 是否真能调通。
 #
 # 本脚本补最低保证：**启动 GUI → 真实 curl POST /mcp → tools/list 返全部
-# skill（现 26 个，ADR-0078/0082/0096/0099 叠加）→ tools/call list_maps /
+# skill（现 27 个，ADR-0078/0082/0096/0099 叠加）→ tools/call list_maps /
 # set_view_mode / screenshot 走通**。
 #
 # ## 用法
@@ -82,7 +82,7 @@ if [ "$READY" != "yes" ]; then
 fi
 echo "[smoke] 端口 ${PORT} 已就绪"
 
-# ① tools/list：应返 26 个 skill，顺序与 ADR-0014 §2.5 + ADR-0078 + ADR-0082 +
+# ① tools/list：应返 27 个 skill，顺序与 ADR-0014 §2.5 + ADR-0078 + ADR-0082 +
 # ADR-0096 + ADR-0099（地形/势力/改点六条与 list_factions）一致。
 TOOLS_JSON=$(curl -s --max-time 5 "$URL" -X POST \
     -H 'content-type: application/json' \
@@ -95,7 +95,7 @@ names = [t['name'] for t in tools]
 expected = ['list_maps','get_map','list_places','get_place','get_state_at_time',
             'get_naming_context','list_factions',
             'create_map','generate_continent','paint_terrain_intent',
-            'create_faction','divide_faction',
+            'create_faction','divide_faction','reset_terrain',
             'create_place','update_place','set_place_kind',
             'undo','save_project','set_nature_names',
             'get_ui_state','set_view_mode','set_panel_visible',
@@ -104,8 +104,8 @@ assert names == expected, f'skill 列表/顺序错: {names}'
 assert all(t['inputSchema']['type'] == 'object' for t in tools), 'inputSchema.type != object'
 print(len(names))
 ")
-if [ "$NAMES" = "26" ]; then
-    echo "[smoke] PASS ①: tools/list 返 26 个 skill，顺序正确"
+if [ "$NAMES" = "27" ]; then
+    echo "[smoke] PASS ①: tools/list 返 27 个 skill，顺序正确"
 else
     echo "[smoke] FAIL ①: tools/list 异常："
     echo "$TOOLS_JSON" | head -3
@@ -236,6 +236,6 @@ else
 fi
 
 if [ "$FAIL" = "0" ]; then
-    echo "[smoke] PASS: MCP server 真机链路（TCP 绑定 + HTTP 解析 + 26 skill + 读路径 + 势力读面 + UI 操控 + 截图回传 + 错误路径）全通"
+    echo "[smoke] PASS: MCP server 真机链路（TCP 绑定 + HTTP 解析 + 27 skill + 读路径 + 势力读面 + UI 操控 + 截图回传 + 错误路径）全通"
 fi
 exit "$FAIL"

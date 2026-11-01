@@ -678,7 +678,7 @@ mod skill_tests {
     /// 单一真源哨兵：include 进二进制的 skill 全文必须仍是完整指南——
     /// 文件被清空 / 误删 / 换成占位内容时在这里爆，而不是到用户手里。
     #[test]
-    fn bundled_skill_keeps_core_sections_and_all_twenty_six_tools() {
+    fn bundled_skill_keeps_core_sections_and_all_twenty_seven_tools() {
         let md = wv_app::http::AGENT_SKILL_MD;
         for section in [
             "wv-http",
@@ -705,6 +705,7 @@ mod skill_tests {
             "paint_terrain_intent",
             "create_faction",
             "divide_faction",
+            "reset_terrain",
             "create_place",
             "update_place",
             "set_place_kind",
