@@ -602,12 +602,12 @@ mod bridge_tests {
         #[test]
         fn branch_is_flat_when_natural_map_hidden_outside_topographic() {
             assert_eq!(
-                field_branch_of(crate::state::ViewMode::VectorFlat, false),
+                field_branch_of(crate::state::ViewMode::VectorFlat, false, false),
                 ViewBranch::Flat,
                 "自然图关 → 素底政治页分支"
             );
             assert_eq!(
-                field_branch_of(crate::state::ViewMode::GoogleMap, false),
+                field_branch_of(crate::state::ViewMode::GoogleMap, false, false),
                 ViewBranch::Flat,
                 "任何非 Topographic 模式都走素底"
             );
@@ -616,7 +616,7 @@ mod bridge_tests {
         #[test]
         fn branch_is_themed_when_natural_map_visible() {
             assert_eq!(
-                field_branch_of(crate::state::ViewMode::VectorFlat, true),
+                field_branch_of(crate::state::ViewMode::VectorFlat, true, false),
                 ViewBranch::Themed,
                 "自然图开 → 主题色板"
             );
@@ -625,12 +625,14 @@ mod bridge_tests {
         #[test]
         fn topographic_mode_always_uses_biome_raw() {
             // CellMap 是方格数据视图——自然图开关不介入（ADR-0051 §5）。
+            // （cell_flat 探针开启时的 CellFlat 例外在 field.rs 的
+            // `cell_flat_probe_switches_topographic_branch_only` 钉。）
             assert_eq!(
-                field_branch_of(crate::state::ViewMode::Topographic, true),
+                field_branch_of(crate::state::ViewMode::Topographic, true, false),
                 ViewBranch::BiomeRaw
             );
             assert_eq!(
-                field_branch_of(crate::state::ViewMode::Topographic, false),
+                field_branch_of(crate::state::ViewMode::Topographic, false, false),
                 ViewBranch::BiomeRaw
             );
         }

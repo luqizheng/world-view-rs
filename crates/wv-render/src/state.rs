@@ -254,6 +254,19 @@ pub struct ViewState {
     /// 会话态、**不落盘**（同 [`Self::field_render`] 先例）：探针是一次性
     /// 验收通道，不进任何序列化格式。
     pub strip_mask: u32,
+    /// **WV_CELLFLAT 方格平涂探针**（2026-11-01 实验，README §12-59 待裁）：
+    /// `true` 时 Topographic（CellMap）的场取色分支从 `BiomeRaw`（方格数据
+    /// 视图：近似色 + 海拔色带 + 三光晕渲 + 海岸三段色带 + 岸线墨线）切到
+    /// `ViewBranch::CellFlat`（逐格 = 冻结群系表真色直出、零加工）。
+    ///
+    /// 由 wv-app 的 `WV_CELLFLAT` 环境探针启动时写入（同 [`Self::strip_mask`]
+    /// 先例）。分支是 `FieldKey` 结构量，切换会整幅重打——探针是启动常量、
+    /// 运行期不翻，不构成重打抖动。**只影响 Topographic 模式**：其余模式的
+    /// 分支选择对它免疫（`field_branch_of` 内部门控）。
+    ///
+    /// 会话态、**不落盘**（同上）：实验探针，采纳与否待实机验收；若转正
+    /// 需先落 ADR（触碰追记十七「方格数据视图」契约的部分条款）。
+    pub cell_flat: bool,
     /// 事件点图层是否可见。
     pub events_visible: bool,
     /// 轨迹图层是否可见。
@@ -336,6 +349,7 @@ impl Default for ViewState {
             terrain_soften: true,
             field_render: true,
             strip_mask: 0,
+            cell_flat: false,
             events_visible: true,
             tracks_visible: true,
             roads_visible: true,

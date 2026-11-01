@@ -162,21 +162,36 @@ pub enum ViewBranch {
     /// 势力填色要压在这层素底上，故它必须**平**：山体明暗会与势力色打架。
     /// 编码 `shape.y = 2.0`（WGSL 侧按阈值比较，见 `code()`）。
     Flat,
+    /// 方格平涂（**实验**，2026-11-01 用户提出，README §12-59 待裁）：
+    /// CellMap 数据视图的「零加工」档——逐格 = 冻结群系表**真色**
+    /// （`biome_raw::BIOME_RAW_COLORS` / `DISTRICT_RAW_COLORS`，经
+    /// [`FieldParams::biome_table`] 进 uniform），无晕渲 / 无海拔色带 /
+    /// 无海岸三段色带 / 无岸线墨线 / 无水陆亚格过渡 / 无域扭曲。
+    ///
+    /// 与 [`ViewBranch::Flat`]（政治页素底）的区别：Flat 是「海陆**两色** +
+    /// 海岸线」，本分支是「每格**自己的**群系色、直出」；与 `BiomeRaw` 的
+    /// 区别：BiomeRaw 是 5 档近似色 + 海拔色带 + 三光晕渲 + 海岸色带 +
+    /// 墨线的方格数据视图（追记十七契约），本分支把这些加工全部关掉。
+    /// 编码 `shape.y = 3.0`。只经 wv-app `WV_CELLFLAT` 探针进入，缺省不可达。
+    CellFlat,
 }
 
 /// 政治页素底分支的 `shape.y` 编码值。
 pub const FLAT_BRANCH_CODE: f32 = 2.0;
+/// 方格平涂分支（实验）的 `shape.y` 编码值。
+pub const CELL_FLAT_BRANCH_CODE: f32 = 3.0;
 
 impl ViewBranch {
     /// 该分支在 uniform `shape.y` 里的编码值。
     ///
-    /// 0 = BiomeRaw / 1 = Themed / 2 = Flat。**WGSL 侧按阈值比较**，
-    /// 改值必须同步 `terrain_field.wgsl`。
+    /// 0 = BiomeRaw / 1 = Themed / 2 = Flat / 3 = CellFlat。**WGSL 侧按阈值
+    /// 比较**，改值必须同步 `terrain_field.wgsl`。
     pub fn code(self) -> f32 {
         match self {
             ViewBranch::BiomeRaw => 0.0,
             ViewBranch::Themed => 1.0,
             ViewBranch::Flat => FLAT_BRANCH_CODE,
+            ViewBranch::CellFlat => CELL_FLAT_BRANCH_CODE,
         }
     }
 }
@@ -284,7 +299,13 @@ pub struct TerrainFieldMaterial {
 /// 这个错误**编译期完全看不出来**——`cargo check` 过、clippy 过、单测过，
 /// 只有真跑起来、`prepare_assets` 上传 uniform 时才炸。故本结构体的每个
 /// 字段一律 `Vec4`，与 WGSL 的 `vec4<f32>` 严格一一对应。
-#[derive(Debug, Clone, Copy, Default, PartialEq, ShaderType)]
+/// ## 为什么不 derive `Default`
+///
+/// `biome_table: [Vec4; 33]` 超过 `[T; N]` 默认实现的上限（32）；且零初始化的
+/// `FieldParams` 本就是**非法态**（`grid < 1` 会整屏退纸色，`default_params`
+/// 才是唯一合法构造入口——全仓只此一处）。有人需要默认值时走
+/// `default_params(...)`，不要给这个类型恢复 `Default`。
+#[derive(Debug, Clone, Copy, PartialEq, ShaderType)]
 pub struct FieldParams {
     /// xy = 格宽 / 格高；zw 预留。
     pub grid: Vec4,
@@ -355,6 +376,25 @@ pub struct FieldParams {
     ///
     /// T6 起被 WGSL 双光源公式正式读取（T5 只是惰性预载，语义翻转日为 T6）。
     pub light_aux: Vec4,
+    /// 方格平涂分支（[`ViewBranch::CellFlat`]，实验）的**群系真色表**：
+    /// 索引 = biome 字节 0..=32——0..=20 = 冻结群系表
+    /// `biome_raw::BIOME_RAW_COLORS`（槽 0 是 NONE 占位，shader 不读它，
+    /// NONE 按 surface 走 [`FieldParams::biome_none_fallback`]）；21..=32 =
+    /// 场景分区固定色 `biome_raw::DISTRICT_RAW_COLORS`。
+    ///
+    /// 这是对 P1 占位色板 `biome_raw_approx` 注释承诺（「精确色值随 P2
+    /// 一起搬」）的提前兑现：33 个 `vec4` = 528 字节，按 std140 **尾部追加**
+    /// 纪律加在本结构体末尾（同 [`FieldParams::light_aux`]，WGSL 同提交
+    /// 镜像），不扰动既有字段偏移。值由 `default_params` 从 `biome_raw`
+    /// 常量表一次性装满（sRGB u8 → 线性，色彩空间纪律同
+    /// [`FieldPalette::default`]）——CPU 烘焙路径（`biome_raw::pick`）与
+    /// GPU 平涂分支共用**唯一一份**色表，两管线同格必同色。
+    pub biome_table: [Vec4; 33],
+    /// 方格平涂分支的回退色：`[0]` = 水面（`biome_raw::FALLBACK_WATER`）、
+    /// `[1]` = 陆面（`biome_raw::FALLBACK_LAND`）。消费条款 =
+    /// `biome_raw::pick` 的 GPU 镜像：biome 0（NONE）按 surface 回退，
+    /// 未知编号（> 32，开放集外的野值）按陆面回退、不得越界。
+    pub biome_none_fallback: [Vec4; 2],
 }
 
 /// 场 shader 的**静态句柄**（编译期内联，不经 AssetServer）。
@@ -622,7 +662,9 @@ pub fn default_params(
         // 旧 T17 钳制对（RELIEF_LO/HI）随 T6 语义翻转整体退役。
         // 素底分支（ADR-0079 T5）**不画晕渲**：政治页是平色面，山体明暗
         // 会与势力填色打架——环境光置 1、双漫反射置 0 = 强度恒 1 的平色。
-        relief: if branch == ViewBranch::Flat {
+        // 方格平涂（实验）同理：零加工档，明暗必须恒 1（shader 侧其实
+        // 在本分支早退不读 relief，这里保持 uniform 语义自洽）。
+        relief: if matches!(branch, ViewBranch::Flat | ViewBranch::CellFlat) {
             Vec4::new(1.0, 0.0, 0.0, 0.0)
         } else {
             Vec4::new(
@@ -655,6 +697,10 @@ pub fn default_params(
             crate::shading::LIGHT_AUX[2],
             0.0,
         ),
+        // 方格平涂真色表（实验）：所有分支都装满——uniform 是整体上传，
+        // 只有 CellFlat 分支读它；常量表装填是零成本的编译期数据搬运。
+        biome_table: biome_table_uniform(),
+        biome_none_fallback: biome_fallback_uniform(),
     }
 }
 
@@ -664,6 +710,41 @@ fn equal_cuts_uniform() -> [Vec4; 2] {
     [
         Vec4::new(c(0), c(1), c(2), c(3)),
         Vec4::new(c(4), c(5), c(6), 0.0),
+    ]
+}
+
+/// sRGB `[u8; 3]` → 线性 `Vec4`（alpha 1）。色板常量都是取色器口径的
+/// sRGB 字节，uniform 住线性空间——直塞会整幅偏白（`FieldPalette` 踩过）。
+fn srgb_u8_to_linear_vec4(rgb: [u8; 3]) -> Vec4 {
+    let lin = LinearRgba::from(Color::srgb(
+        rgb[0] as f32 / 255.0,
+        rgb[1] as f32 / 255.0,
+        rgb[2] as f32 / 255.0,
+    ));
+    Vec4::new(lin.red, lin.green, lin.blue, 1.0)
+}
+
+/// 方格平涂真色表（[`FieldParams::biome_table`]）：0..=20 冻结群系表 +
+/// 21..=32 场景分区表，**直接引用** `biome_raw` 的常量——不抄值，CPU 的
+/// `biome_raw::pick` 与 GPU 平涂分支才是同一份真源。
+fn biome_table_uniform() -> [Vec4; 33] {
+    use crate::terrain_view::biome_raw::{BIOME_RAW_COLORS, DISTRICT_RAW_COLORS};
+    std::array::from_fn(|i| {
+        let rgb = if i < BIOME_RAW_COLORS.len() {
+            BIOME_RAW_COLORS[i]
+        } else {
+            DISTRICT_RAW_COLORS[i - BIOME_RAW_COLORS.len()]
+        };
+        srgb_u8_to_linear_vec4(rgb)
+    })
+}
+
+/// 方格平涂回退色（[`FieldParams::biome_none_fallback`]）：`[水, 陆]`。
+fn biome_fallback_uniform() -> [Vec4; 2] {
+    use crate::terrain_view::biome_raw::{FALLBACK_LAND, FALLBACK_WATER};
+    [
+        srgb_u8_to_linear_vec4(FALLBACK_WATER),
+        srgb_u8_to_linear_vec4(FALLBACK_LAND),
     ]
 }
 
@@ -1052,7 +1133,7 @@ mod political_page_tests {
 
     use super::*;
 
-    /// `shape.y` 编码：0 = BiomeRaw / 1 = Themed / 2 = Flat。
+    /// `shape.y` 编码：0 = BiomeRaw / 1 = Themed / 2 = Flat / 3 = CellFlat。
     ///
     /// 编码值写死断言——uniform 布局的对外契约（WGSL 侧按阈值比较），
     /// 改值即改 WGSL 分支判据，必须同步。
@@ -1061,6 +1142,11 @@ mod political_page_tests {
         assert_eq!(ViewBranch::BiomeRaw.code(), 0.0, "BiomeRaw 编码");
         assert_eq!(ViewBranch::Themed.code(), 1.0, "Themed 编码");
         assert_eq!(ViewBranch::Flat.code(), 2.0, "Flat（政治页素底）编码");
+        assert_eq!(
+            ViewBranch::CellFlat.code(),
+            3.0,
+            "CellFlat（方格平涂实验）编码"
+        );
     }
 
     /// `default_params` 把分支编码写进 `shape.y`——uniform 装配走这条路径。
@@ -1095,6 +1181,71 @@ mod political_page_tests {
                 && (themed.relief[1] - crate::shading::DIFFUSE_MAIN).abs() < 1e-6,
             "非素底分支保留 ADR-0077 三光系数，got {:?}",
             themed.relief
+        );
+        // 方格平涂（实验）同属平色面：明暗必须恒 1。
+        let cell_flat = default_params(
+            [512.0, 512.0],
+            6.0,
+            ViewBranch::CellFlat,
+            Default::default(),
+        );
+        assert_eq!(
+            cell_flat.relief,
+            Vec4::new(1.0, 0.0, 0.0, 0.0),
+            "方格平涂分支三光系数应为 (1, 0, 0)（零加工档），got {:?}",
+            cell_flat.relief
+        );
+    }
+
+    /// 方格平涂真色表装填锚：uniform 表必须与 `biome_raw` 常量**同源**
+    /// （不是抄值）且 sRGB → 线性转换正确——CPU `pick` 与 GPU 平涂两管线
+    /// 同格同色的契约，靠本测试钉住「装填引用不被改成手抄副本」。
+    #[test]
+    fn cell_flat_biome_table_mirrors_biome_raw_constants() {
+        use crate::terrain_view::biome_raw::{BIOME_RAW_COLORS, DISTRICT_RAW_COLORS};
+        let p = default_params(
+            [512.0, 512.0],
+            6.0,
+            ViewBranch::CellFlat,
+            Default::default(),
+        );
+        let want = |rgb: [u8; 3]| {
+            let lin = LinearRgba::from(Color::srgb(
+                rgb[0] as f32 / 255.0,
+                rgb[1] as f32 / 255.0,
+                rgb[2] as f32 / 255.0,
+            ));
+            Vec4::new(lin.red, lin.green, lin.blue, 1.0)
+        };
+        // 抽两端 + 中间：冻结表槽 1（森林）、槽 14（咸水）、槽 20（道路）。
+        for i in [1usize, 14, 20] {
+            assert_eq!(
+                p.biome_table[i],
+                want(BIOME_RAW_COLORS[i]),
+                "biome_table[{i}] 应与冻结群系表线性同值"
+            );
+        }
+        // 分区段：槽 21 = 分区表 [0]（未分区）、槽 32 = 分区表 [11]（大殿）。
+        assert_eq!(
+            p.biome_table[21],
+            want(DISTRICT_RAW_COLORS[0]),
+            "biome_table[21] 应为分区表首项"
+        );
+        assert_eq!(
+            p.biome_table[32],
+            want(DISTRICT_RAW_COLORS[11]),
+            "biome_table[32] 应为分区表末项"
+        );
+        // 回退对：[水, 陆] 顺序（shader 按 is_land 选槽，装反 = NONE 水格变陆色）。
+        assert_eq!(
+            p.biome_none_fallback[0],
+            want(crate::terrain_view::biome_raw::FALLBACK_WATER),
+            "fallback[0] 应为水面回退色"
+        );
+        assert_eq!(
+            p.biome_none_fallback[1],
+            want(crate::terrain_view::biome_raw::FALLBACK_LAND),
+            "fallback[1] 应为陆面回退色"
         );
     }
 }

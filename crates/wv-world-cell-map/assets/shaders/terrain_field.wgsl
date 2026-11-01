@@ -53,6 +53,12 @@ struct FieldParams {
     // 真 45° 单位向量），w 预留。双光源明暗公式在下方（常量镜像 shading.rs，
     // 注释互指）；std140 尾部追加的布局纪律见 material.rs 同名注释。
     light_aux: vec4<f32>,
+    // 方格平涂分支（CellFlat，实验 WV_CELLFLAT）：群系真色表（索引 = biome
+    // 字节 0..=32；0..=20 冻结群系表 / 21..=32 场景分区表）+ 回退色
+    // [水, 陆]。装填真源 = biome_raw 常量表（material.rs 同名注释互指）；
+    // **尾部追加**，std140 布局纪律同上。
+    biome_table: array<vec4<f32>, 33>,
+    biome_none_fallback: array<vec4<f32>, 2>,
 };
 
 // ── 常量（与 material.rs 同源）───────────────────────────────────────────
@@ -136,6 +142,33 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let grid = p.grid.xy;
     if (grid.x < 1.0 || grid.y < 1.0) {
         return p.paper;
+    }
+
+    // ── 方格平涂分支（实验 WV_CELLFLAT，README §12-59 待裁）──────────────
+    // `shape.y = 3.0`（CellFlat）：**每格 = 自己的群系真色，直出**。
+    // 在一切加工之前早退，天然豁免：域扭曲（下方 `warp_offset`）、海拔
+    // 色带、三光晕渲、海岸三段色带、近岸白滩、岸线墨线、水陆亚格过渡、
+    // 水彩颗粒——海岸与群系边界就是**格子的硬边**（attr 是 Nearest 采样，
+    // 格内恒定）。水面也不再走 theme[0] + 深浅色带，14/15/16 各取自己的
+    // 真色（「定义群系是什么颜色，他就是什么颜色」）。
+    //
+    // 取色语义 = `biome_raw::pick` 的 GPU 镜像（与其 CPU 实现逐条对应，
+    // 改任何一边必须同步另一边）：NONE 按水陆回退；1..=20 冻结群系表；
+    // 21..=32 场景分区表；> 32 未知编号按陆面回退、不得越界。
+    // UV 约定：`in.uv` 直采（同下方主路径 `uv0` 的映射结论，无扭曲）。
+    if (p.shape.y > 2.5) {
+        let attr_flat = textureSampleLevel(attr_tex, attr_smp, in.uv, 0.0);
+        let is_land_flat = attr_flat.r > 0.5;
+        let id_flat = u32(round(attr_flat.g * 255.0));
+        var c = p.biome_none_fallback[1u].rgb; // 未知编号 → 陆面回退
+        if (id_flat == 0u) {
+            // NONE：水 → fallback[0]，陆 → fallback[1]。
+            c = p.biome_none_fallback[select(0u, 1u, is_land_flat)].rgb;
+        } else if (id_flat <= 32u) {
+            // uniform 数组运行期下标：与 elev_ramp 同款（uniform 存储允许）。
+            c = p.biome_table[id_flat].rgb;
+        }
+        return vec4<f32>(c, 1.0);
     }
 
     // 格坐标（texel 空间）。
