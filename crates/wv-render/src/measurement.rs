@@ -308,17 +308,14 @@ pub fn render_measurements(
     // 不用 `label_collision` 的全局占位池：那是六类地图标签（地名/街名/势力…）
     // 的通路级设施，测量读数是独立系统（不进那条链），接入会牵动六类标签的
     // 优先级与预算口径——此处局部解决，代价 O(n²) 而 n = 读数块数（个位数~几十）。
-    let mut placements: Vec<(Vec2, &str)> = Vec::new();
-    {
-        placements = place_labels(&wanted, font_size);
-    }
+    let placements: Vec<(Vec2, &str)> = place_labels(&wanted, font_size);
 
     let mut iter_main = q_main.iter_mut();
     let mut iter_shadow = q_shadow.iter_mut();
     let mut iter_plate = q_plate.iter_mut();
     let plate_color = bevy::color::Color::srgba(0.0, 0.0, 0.0, 0.85);
     for (pos, text) in &placements {
-        let text: &str = *text;
+        let text: &str = text;
 
         // 0. 背板（在文字与线之间，z = MEASURE_Z + 0.3 — 高于线 z=0，低于字 z=0.5）。
         let plate_size = estimate_text_world_size(text, font_size);
