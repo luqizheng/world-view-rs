@@ -15,8 +15,6 @@ use crate::theme::ui_theme::UiShellConfig;
 use crate::theme::ui_tokens::{ShellPalette, UiTheme};
 use crate::ui::shell::UiShell;
 use wv_render::drill::DrillMarkerPalette;
-use wv_render::measurement::MeasureLabelStyle;
-use wv_ui::widgets::{SelectedObjectLabelColors, SELECTED_OBJECT_LABEL_PANEL_ALPHA};
 
 /// 每帧把外壳令牌灌进钻入标记调色（ADR-0020 §2.6）。
 ///
@@ -29,23 +27,6 @@ pub fn sync_drill_marker_palette(
     let shell = UiShell::new(&shell_cfg);
     palette.accent = color32_to_bevy(shell.accent());
     palette.visited = color32_to_bevy(shell.t3());
-}
-
-/// 测量读数面板的配色注入（wv-ui「Selected object label」组件 → 渲染侧资源）。
-///
-/// 同「钻入标记界面色」的通道（ADR-0020 §2.6）：渲染层**不**持 UI 令牌源，
-/// 应用层每帧把 wv-ui 公共组件的配色灌进渲染资源，渲染只读。
-/// 组件规格（Figma `3:21165` 暗 / `3:21704` 亮）见
-/// `wv_ui::widgets::selected_object_label`。
-pub fn sync_measure_label_style(
-    shell_cfg: Res<UiShellConfig>,
-    mut style: ResMut<MeasureLabelStyle>,
-) {
-    let c = SelectedObjectLabelColors::for_theme(shell_cfg.theme);
-    style.panel = color32_to_bevy(c.panel.to_color32_alpha(SELECTED_OBJECT_LABEL_PANEL_ALPHA));
-    style.border = color32_to_bevy(c.border.to_color32());
-    style.indicator = color32_to_bevy(c.indicator.to_color32());
-    style.text = color32_to_bevy(c.text.to_color32());
 }
 
 /// egui `Color32` → Bevy `Color`（gizmo 用的世界色）。

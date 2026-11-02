@@ -656,13 +656,6 @@ pub(super) fn register(app: &mut App) {
         Update,
         ui::hover_tooltip::hover_tooltip_system.after(wv_render::drill::update_sea_labels),
     );
-    // 测量读数面板配色（wv-ui「Selected object label」组件）：同钻入标记的
-    // 令牌通道——应用层每帧灌进渲染资源，绘制只读。
-    app.add_systems(
-        Update,
-        crate::render_bridge::sync_measure_label_style
-            .before(wv_render::measurement::render_measurements),
-    );
 
     // 切蛋糕 pen/编辑（ADR-0079 T11–T13）：**必须进 `EguiPrimaryContextPass`**
     // ——bevy_egui 0.42 起画 egui 的系统一律在该调度内执行；挂裸 `Update`
