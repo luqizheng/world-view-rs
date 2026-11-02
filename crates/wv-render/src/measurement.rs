@@ -212,7 +212,9 @@ pub fn render_measurements(
     })();
 
     // ---- 期望标签集（位置 + 文本）----
-    let mut wanted: Vec<(Vec2, String)> = Vec::new();
+    // (位置, 文本, 优先级)：0 = 总长 / 矩形读数（信息量最大，先占位），
+    // 1 = 分段读数，2 = 草稿预览（临时，压到最后）。
+    let mut wanted: Vec<(Vec2, String, u8)> = Vec::new();
     for m in cache.measurements() {
         match m.kind {
             MeasurementKind::Polyline => {
@@ -224,18 +226,22 @@ pub fn render_measurements(
                     let b = Vec2::new(w[1].x, w[1].y);
                     let seg_len = (b - a).length();
                     let mid = grid.map_to_view((a + b) * 0.5);
-                    wanted.push((mid, format_length_label(seg_len, km_factor)));
+                    wanted.push((mid, format_length_label(seg_len, km_factor), 1));
                 }
-                // 总长标在第一段中点上方。
+                // 总长标在首段中点**上方**——偏移量须让开首段标签的**整块文字**
+                // （两行文字半高 ≈ 1.15 × 字高）：旧的 1.2 × 字高只让开了
+                // 一行，两块标签直接叠在一起（2026-11-02 用户实拍「字体混在
+                // 一起」）。2.6 × 字高 = 首段块顶 + 总长块半高 + 余量。
                 let first_mid = grid.map_to_view({
                     let a = Vec2::new(m.points[0].x, m.points[0].y);
                     let b = Vec2::new(m.points[1].x, m.points[1].y);
                     (a + b) * 0.5
                 });
-                let above = first_mid + Vec2::new(0.0, label_world * 1.2);
+                let above = first_mid + Vec2::new(0.0, label_world * 2.6);
                 wanted.push((
                     above,
                     format_total_length_label(m.total_length(), km_factor),
+                    0,
                 ));
             }
             MeasurementKind::Rectangle => {
@@ -247,7 +253,7 @@ pub fn render_measurements(
                 let dx = (b.x - a.x).abs();
                 let dy = (b.y - a.y).abs();
                 let mid = grid.map_to_view((a + b) * 0.5);
-                wanted.push((mid, format_rectangle_label(dx, dy, km_factor)));
+                wanted.push((mid, format_rectangle_label(dx, dy, km_factor), 0));
             }
         }
     }
@@ -258,7 +264,7 @@ pub fn render_measurements(
             let b = w[1];
             let seg_len = (b - a).length();
             let mid = grid.map_to_view((a + b) * 0.5);
-            wanted.push((mid, format_length_label(seg_len, km_factor)));
+            wanted.push((mid, format_length_label(seg_len, km_factor), 2));
         }
         if measure.draft.len() >= 2 {
             let a = measure.draft[0];
@@ -270,8 +276,9 @@ pub fn render_measurements(
                 .sum();
             let first_mid = grid.map_to_view((a + b) * 0.5);
             wanted.push((
-                first_mid + Vec2::new(0.0, label_world * 1.2),
+                first_mid + Vec2::new(0.0, label_world * 2.6),
                 format_total_length_label(total, km_factor),
+                2,
             ));
         }
     }
@@ -291,12 +298,27 @@ pub fn render_measurements(
     // - 4 shadow 文字（4 方向描边）
     // - 1 plate 矩形（不透明暗色背板，挡住穿过的黄线）
     // 阴影池大小 = 4N，背板池大小 = N，主 mesh 池大小 = N。
+    // ---- 标签避让摆位（2026-11-02 用户实拍「字体混在一起」）----
+    //
+    // 同一张图上多条测量挨得近时，读数块会叠成糊字（截图里三条读数互相压）。
+    // 这里做**测量系统内部**的局部避让：按优先级（总长/矩形 > 分段 > 草稿）
+    // 依次落位，与已落位块相撞就上下推开重试，仍撞不上就**丢弃该块**
+    // （放不下就不画——糊在一起比少一块更难读）。
+    //
+    // 不用 `label_collision` 的全局占位池：那是六类地图标签（地名/街名/势力…）
+    // 的通路级设施，测量读数是独立系统（不进那条链），接入会牵动六类标签的
+    // 优先级与预算口径——此处局部解决，代价 O(n²) 而 n = 读数块数（个位数~几十）。
+    let mut placements: Vec<(Vec2, &str)> = Vec::new();
+    {
+        placements = place_labels(&wanted, font_size);
+    }
+
     let mut iter_main = q_main.iter_mut();
     let mut iter_shadow = q_shadow.iter_mut();
     let mut iter_plate = q_plate.iter_mut();
     let plate_color = bevy::color::Color::srgba(0.0, 0.0, 0.0, 0.85);
-    for (pos, text) in &wanted {
-        let text: &str = text.as_str();
+    for (pos, text) in &placements {
+        let text: &str = *text;
 
         // 0. 背板（在文字与线之间，z = MEASURE_Z + 0.3 — 高于线 z=0，低于字 z=0.5）。
         let plate_size = estimate_text_world_size(text, font_size);
@@ -850,6 +872,51 @@ fn estimate_text_world_size(text: &str, font_world_size: f32) -> Vec2 {
 ///
 /// 无 km： `"5.0"`
 /// 有 km： `"5.0 wu\n(8.2 km)"`（用换行让 km 显示在第二行，避免水平加宽）。
+/// 标签避让摆位（纯函数，可单测）。
+///
+/// 按优先级（总长/矩形 0 > 分段 1 > 草稿 2）依次落位；与已落位块相撞就
+/// **上下交替推开**重试（最多 8 次），仍撞不上就**丢弃该块**——放不下就不画，
+/// 糊在一起比少一块更难读。
+///
+/// 盒尺寸走 [`estimate_text_world_size`]（与背板同源），故避让判据与
+/// 实际绘制范围一致。
+pub(crate) fn place_labels(wanted: &[(Vec2, String, u8)], font_size: f32) -> Vec<(Vec2, &str)> {
+    // 稳定排序：同优先级保持生成顺序（按测量分组，读数顺序可预期）。
+    let mut ordered: Vec<&(Vec2, String, u8)> = wanted.iter().collect();
+    ordered.sort_by_key(|(_, _, prio)| *prio);
+    let mut placed: Vec<(Vec2, Vec2)> = Vec::new();
+    let mut out: Vec<(Vec2, &str)> = Vec::new();
+    for (pos, text, _) in ordered {
+        let size = estimate_text_world_size(text, font_size);
+        let gap = font_size * 0.35;
+        let step = size.y + gap;
+        let mut candidate = *pos;
+        let mut ok = false;
+        // 候选位阶梯：0 → +1 → −1 → +2 → −2 → +3 → −3 → +4（单位 = 块高 + 间隙）。
+        // **不能用「交替上下推」**：步长恰等于块高时会在两个已占位之间来回
+        // 振荡（推上去撞 A、推下来撞 B，永远落不下）——阶梯式单调扩张才收敛。
+        const LADDER: [f32; 8] = [0.0, 1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 4.0];
+        for dir in LADDER {
+            candidate = Vec2::new(pos.x, pos.y + dir * step);
+            let hit = placed.iter().any(|(p, s)| {
+                let dx = (candidate.x - p.x).abs() < (size.x + s.x) * 0.5;
+                let dy = (candidate.y - p.y).abs() < (size.y + s.y) * 0.5;
+                dx && dy
+            });
+            if !hit {
+                ok = true;
+                break;
+            }
+        }
+        if ok {
+            placed.push((candidate, size));
+            out.push((candidate, text.as_str()));
+        }
+    }
+    out
+}
+
+/// 标签格式：分段长度。
 pub(crate) fn format_length_label(wu: f32, km_factor: Option<f64>) -> String {
     match km_factor {
         None => format!("{wu:.1}"),
@@ -1153,6 +1220,69 @@ mod tests {
         };
         st.on_map_change(Some(&wv_core::Id::new_unchecked("m1")));
         assert_eq!(st.draft.len(), 1, "同图不清草稿");
+    }
+
+    /// 叠放的读数块必须被推开（用户实拍：三条读数糊成一团）。
+    #[test]
+    fn overlapping_labels_are_pushed_apart() {
+        let font = 13.0_f32;
+        // 三块完全同位的读数（总长 / 分段 / 分段）。
+        let wanted = vec![
+            (
+                Vec2::new(100.0, 50.0),
+                "Σ 10.0 wu\n(1.00 km)".to_string(),
+                0u8,
+            ),
+            (Vec2::new(100.0, 50.0), "5.0 wu\n(0.50 km)".to_string(), 1),
+            (Vec2::new(100.0, 50.0), "5.0 wu\n(0.50 km)".to_string(), 1),
+        ];
+        let placed = place_labels(&wanted, font);
+        assert_eq!(placed.len(), 3, "三块都放得下（推得开就不该丢）");
+        // 任两块不得重叠（按同一盒尺寸判据）。
+        for i in 0..placed.len() {
+            for j in (i + 1)..placed.len() {
+                let a = placed[i].0;
+                let b = placed[j].0;
+                let size = estimate_text_world_size(placed[i].1, font);
+                let dx = (a.x - b.x).abs() >= (size.x + size.x) * 0.5;
+                let dy = (a.y - b.y).abs() >= (size.y + size.y) * 0.5;
+                assert!(dx || dy, "块 {i} 与块 {j} 仍重叠：{a:?} vs {b:?}");
+            }
+        }
+    }
+
+    /// 优先级高的先占位：总长读数留在原位，分段读数被推走。
+    #[test]
+    fn higher_priority_label_keeps_its_place() {
+        let font = 13.0_f32;
+        let wanted = vec![
+            (Vec2::new(100.0, 50.0), "5.0 wu\n(0.50 km)".to_string(), 1u8),
+            (
+                Vec2::new(100.0, 50.0),
+                "Σ 10.0 wu\n(1.00 km)".to_string(),
+                0,
+            ),
+        ];
+        let placed = place_labels(&wanted, font);
+        assert_eq!(placed.len(), 2);
+        let total = placed
+            .iter()
+            .find(|(_, t)| t.starts_with('Σ'))
+            .expect("总长读数");
+        let seg = placed
+            .iter()
+            .find(|(_, t)| t.starts_with('5'))
+            .expect("分段读数");
+        assert!(
+            (total.0 - Vec2::new(100.0, 50.0)).length() < 1e-3,
+            "高优先级（总长）应留在原位，实得 {:?}",
+            total.0
+        );
+        assert!(
+            (seg.0 - Vec2::new(100.0, 50.0)).length() > 1e-3,
+            "低优先级（分段）应被推开，实得 {:?}",
+            seg.0
+        );
     }
 
     #[test]
