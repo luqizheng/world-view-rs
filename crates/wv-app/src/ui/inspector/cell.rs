@@ -251,12 +251,13 @@ pub(crate) fn render_fields(
     }
 }
 
-/// 批量区读数：N 格 / 平均海拔 / 群系分布（[ADR-0040] 补 A）。
+/// 批量区读数：平均海拔 / 最高最低 / 群系分布（[ADR-0040] 补 A）。
 ///
 /// 「这一片现在是什么」必须可读——否则用户只能盲改。
+///
+/// **不含格数**：格数读数在 dialog 顶部的读数条（`render_readout_bar`，
+/// 「选中 N 格」）**只出现一次**——2026-11-02 用户裁定删掉此处原有的重复行。
 struct RegionStats {
-    /// 选区格数。
-    pub count: usize,
     /// 平均海拔（米，四舍五入）。
     pub avg_height: i32,
     /// 最高 / 最低海拔（米）。
@@ -300,7 +301,6 @@ fn region_stats(
     let mut biome_hist: Vec<(u8, usize)> = hist.into_iter().collect();
     biome_hist.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     Some(RegionStats {
-        count,
         avg_height: (sum_h / count as i64) as i32,
         max_height: max_h,
         min_height: min_h,
@@ -370,18 +370,8 @@ pub(crate) fn render_batch_section(
     let Some(stats) = region_stats(projection, map, sel) else {
         return;
     };
-    // 头部计数改用 stats.count（越界格跳过的真实格数，与读数一致）。
-    ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new(format!(
-                "{} {}",
-                stats.count,
-                t(loc, I18nKey::BatchCellsCount)
-            ))
-            .size(font_size::SMALL)
-            .color(shell.accent()),
-        );
-    });
+    // 2026-11-02 用户裁定：格数读数**只在 dialog 顶部读数条**出现一次
+    // （「选中 712 格」），此处原有一行「712 格已选」是重复展示——删掉。
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new(t(loc, I18nKey::BatchStatsHeight))
@@ -781,7 +771,10 @@ mod tests {
         sel
     }
 
-    /// 批量读数：N 格 / 平均海拔 / 最高最低 / 群系分布（次数降序）。
+    /// 批量读数：平均海拔 / 最高最低 / 群系分布（次数降序）。
+    ///
+    /// 格数不再随读数返回（2026-11-02 用户裁定：格数只在 dialog 顶部读数条
+    /// 出现一次）——「统计到几格」改由**群系分布求和**断言。
     #[test]
     fn region_stats_summarizes_selection() {
         let (projection, map) = terrain_of(&[
@@ -792,7 +785,11 @@ mod tests {
         ]);
         let sel = selection_of(&map, &[(0, 0), (1, 0), (2, 0), (3, 0)]);
         let s = region_stats(&projection, &map, &sel).expect("stats");
-        assert_eq!(s.count, 4);
+        assert_eq!(
+            s.biome_hist.iter().map(|(_, n)| n).sum::<usize>(),
+            4,
+            "统计了 4 格"
+        );
         assert_eq!(s.avg_height, 250, "(100+200+300+400)/4");
         assert_eq!(s.min_height, 100);
         assert_eq!(s.max_height, 400);
@@ -808,7 +805,11 @@ mod tests {
         let sel = selection_of(&map, &[(0, 0), (99, 99)]);
         assert_eq!(sel.len(), 1, "越界格不入位图");
         let s = region_stats(&projection, &map, &sel).expect("stats");
-        assert_eq!(s.count, 1, "越界格应被跳过");
+        assert_eq!(
+            s.biome_hist,
+            vec![(1, 1)],
+            "越界格应被跳过（只统计到 1 格）"
+        );
         assert_eq!(s.avg_height, 50);
     }
 

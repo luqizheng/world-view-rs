@@ -45,25 +45,9 @@ pub enum CellEditTab {
     Batch,
 }
 
-impl CellEditTab {
-    fn index(self) -> usize {
-        match self {
-            CellEditTab::Biome => 0,
-            CellEditTab::Poi => 1,
-            CellEditTab::Cell => 2,
-            CellEditTab::Batch => 3,
-        }
-    }
-
-    fn from_index(i: usize) -> Self {
-        match i {
-            0 => CellEditTab::Biome,
-            1 => CellEditTab::Poi,
-            2 => CellEditTab::Cell,
-            _ => CellEditTab::Batch,
-        }
-    }
-}
+// 页签的**规范次序** = 群系 → POI → 单格 → 批量（dialog 装配处按此序过滤
+// 出可见页签）。原先的 `index()/from_index()` 固定下标映射随动态装配退役——
+// 可见集按前提过滤后不再有稳定的「下标 ↔ 页签」对应。
 
 /// 双击开 dialog 的页签裁决（纯函数，可单测）。
 ///
@@ -77,6 +61,53 @@ pub fn decide_tab(sel_changed: bool, sel_len: usize, last: CellEditTab) -> CellE
     } else {
         last
     }
+}
+
+/// **可见页签**（按数据前提过滤）+ 回退后的当前页签（纯函数，可单测）。
+///
+/// 2026-11-02 用户裁定：「选中群系弹出属性框时，POI 与单格不需要」——用户
+/// 实拍 712 格群系选区上，那两页要么是空态、要么语义不成立。故按**数据
+/// 前提**决定页签在场与否，而不是四页永远并排：
+///
+/// - POI：仅当选中了 Place 实体（否则整页是「未选中地点」空态）；
+/// - 单格：仅当选区恰为 1 格（多格选区没有「这一格」）；
+/// - 群系 / 批量：常驻（命名物化与整选区编辑任何时候都可用）。
+///
+/// 当前页签若被隐藏（选区从 1 格变成 712 格），按选区规模回退：0 格 →
+/// 群系 / 1 格 → 单格 / 多格 → 批量（与 [`decide_tab`] 同口径）。
+pub fn visible_tabs(
+    poi_ok: bool,
+    cell_ok: bool,
+    current: CellEditTab,
+    sel_len: u32,
+) -> (Vec<CellEditTab>, CellEditTab) {
+    let visible: Vec<CellEditTab> = [
+        CellEditTab::Biome,
+        CellEditTab::Poi,
+        CellEditTab::Cell,
+        CellEditTab::Batch,
+    ]
+    .into_iter()
+    .filter(|tab| match tab {
+        CellEditTab::Poi => poi_ok,
+        CellEditTab::Cell => cell_ok,
+        _ => true,
+    })
+    .collect();
+    let fallback = match sel_len {
+        0 => CellEditTab::Biome,
+        1 => CellEditTab::Cell,
+        _ => CellEditTab::Batch,
+    };
+    let current = if visible.contains(&current) {
+        current
+    } else if visible.contains(&fallback) {
+        fallback
+    } else {
+        // 前提与规模矛盾时的兜底：取可见集首项（群系恒在）。
+        visible[0]
+    };
+    (visible, current)
 }
 
 /// dialog 跨帧状态（会话态，不落盘）。`Default` 直接 derive：
@@ -168,22 +199,34 @@ pub fn cell_edit_dialog(
         .collapsible(false)
         .open(&mut visible)
         .show(ctx, |ui| {
-            // ── 页签条（四面板）──
-            let labels = [
-                t(loc, I18nKey::CellDlgTabBiome),
-                t(loc, I18nKey::CellDlgTabPoi),
-                t(loc, I18nKey::CellDlgTabCell),
-                t(loc, I18nKey::CellDlgTabBatch),
-            ];
-            if let Some(i) = crate::ui::widgets::tabs(
-                ui,
-                &shell,
-                "cell_dlg_tabs",
-                &labels,
-                state.tab.index(),
-                &[],
-            ) {
-                state.tab = CellEditTab::from_index(i);
+            // ── 页签条：**按当前数据动态装配**（2026-11-02 用户裁定）──
+            //
+            // 「选中群系弹出属性框时，POI 与单格不需要」——判定规则与回退
+            // 口径见 [`visible_tabs`]（纯函数，带单测）。
+            let poi_ok = projection
+                .selection
+                .as_ref()
+                .is_some_and(|s| s.kind == wv_core::EntityKind::Place);
+            let cell_ok = sel.len() == 1;
+            let (visible, current) = visible_tabs(poi_ok, cell_ok, state.tab, sel.len());
+            state.tab = current;
+            let selected = visible
+                .iter()
+                .position(|tab| *tab == state.tab)
+                .unwrap_or(0);
+            let labels: Vec<&str> = visible
+                .iter()
+                .map(|tab| match tab {
+                    CellEditTab::Biome => t(loc, I18nKey::CellDlgTabBiome),
+                    CellEditTab::Poi => t(loc, I18nKey::CellDlgTabPoi),
+                    CellEditTab::Cell => t(loc, I18nKey::CellDlgTabCell),
+                    CellEditTab::Batch => t(loc, I18nKey::CellDlgTabBatch),
+                })
+                .collect();
+            if let Some(i) =
+                crate::ui::widgets::tabs(ui, &shell, "cell_dlg_tabs", &labels, selected, &[])
+            {
+                state.tab = visible[i];
             }
             ui.add_space(space::SM);
 
@@ -530,7 +573,7 @@ pub(crate) fn read_cell_of(
 mod tests {
     //! 打开规则的页签裁决（ADR-0097）。
 
-    use super::{decide_tab, CellEditTab};
+    use super::{decide_tab, visible_tabs, CellEditTab};
 
     #[test]
     fn changed_selection_opens_biome_tab_for_naming() {
@@ -562,5 +605,60 @@ mod tests {
             CellEditTab::Poi,
             "上次页签被保留"
         );
+    }
+
+    /// 用户裁定（2026-11-02）：选中群系（多格选区）时，**POI 与单格页签
+    /// 不在场**——它们要么是空态、要么语义不成立（多格选区没有「这一格」）。
+    #[test]
+    fn biome_multi_selection_hides_poi_and_cell_tabs() {
+        let (visible, current) = visible_tabs(false, false, CellEditTab::Biome, 712);
+        assert_eq!(
+            visible,
+            vec![CellEditTab::Biome, CellEditTab::Batch],
+            "多格群系选区只留「群系 / 批量」两页"
+        );
+        assert!(
+            !visible.contains(&CellEditTab::Poi),
+            "无 Place 实体选中时 POI 页应在场之外"
+        );
+        assert!(
+            !visible.contains(&CellEditTab::Cell),
+            "多格选区时单格页应在场之外"
+        );
+        assert_eq!(current, CellEditTab::Biome, "当前页签可见则保持");
+    }
+
+    /// 单格选区：单格页在场；POI 仍需 Place 实体选中才在场。
+    #[test]
+    fn single_cell_selection_shows_cell_tab() {
+        let (visible, current) = visible_tabs(false, true, CellEditTab::Cell, 1);
+        assert_eq!(
+            visible,
+            vec![CellEditTab::Biome, CellEditTab::Cell, CellEditTab::Batch],
+            "单格选区留「群系 / 单格 / 批量」"
+        );
+        assert_eq!(current, CellEditTab::Cell, "当前页签可见则保持");
+        // 选了 Place 实体 → POI 页回到场内。
+        let (visible, _) = visible_tabs(true, true, CellEditTab::Poi, 1);
+        assert!(
+            visible.contains(&CellEditTab::Poi),
+            "选中 Place 实体时 POI 页应在场"
+        );
+    }
+
+    /// 当前页签被隐藏时的回退：多格 → 批量；单格 → 单格；无选区 → 群系。
+    ///
+    /// 注意前提：**当前页签必须真的被隐藏**才回退——批量页恒在场，故
+    /// 「0 格 + 当前批量」保持批量不动（回退只针对消失的页签）。
+    #[test]
+    fn hidden_current_tab_falls_back_by_selection_size() {
+        let (_, current) = visible_tabs(false, false, CellEditTab::Cell, 712);
+        assert_eq!(current, CellEditTab::Batch, "多格 → 批量");
+        let (_, current) = visible_tabs(false, true, CellEditTab::Poi, 1);
+        assert_eq!(current, CellEditTab::Cell, "单格 → 单格");
+        let (_, current) = visible_tabs(false, false, CellEditTab::Cell, 0);
+        assert_eq!(current, CellEditTab::Biome, "无选区 → 群系");
+        let (_, current) = visible_tabs(false, false, CellEditTab::Batch, 0);
+        assert_eq!(current, CellEditTab::Batch, "批量页恒在场，不触发回退");
     }
 }
