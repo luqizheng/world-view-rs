@@ -724,20 +724,56 @@ fn caption_row(ui: &mut egui::Ui, shell: &UiShell, text: &str) {
 /// 单个图层格：名称（micro text_2）+ 右侧 toggle（web `.layer-row` 高 25）。
 ///
 /// 整格作为命中区（点名称也能切，比 web 只点 toggle 更顺手）。
+///
+/// ## 宽度**不取** `ui.available_width()`（2026-11-02 用户实拍修）
+///
+/// 旧写法 `92.0.min(ui.available_width())` 在 egui `Grid` 里会**永久锁死**
+/// 40px 宽：egui 的 `GridLayout::available_rect` 对**非末列**取「上一帧该列
+/// 宽度」，首帧则是 `min_cell_size.x`（= `interact_size.x` = 40）。于是格子
+/// 恒为 40px；而名称是 `painter` 直接画的（**不参与布局**、可以溢出格宽），
+/// toggle 画在格宽右端 → 正好压住名称（用户实拍：只剩「平 / 事 / 道 / 势」
+/// 半个字）。首帧按 40 布局、此后每帧沿用 40，永不自愈。
+///
+/// 现在：格子宽度**取常数**（列宽由 Grid 自己按内容定，末列仍可拉伸），
+/// 名称按「toggle 左侧可用宽」测量并**裁剪**（照 `wv_ui::widgets::layer_panel`
+/// 的既有写法：`layout_no_wrap` + `with_clip_rect`），文字再长也不会压到
+/// toggle 上。
 fn layer_cell(ui: &mut egui::Ui, shell: &UiShell, name: &str, flag: &mut bool) {
-    let cell_w = 92.0_f32.min(ui.available_width());
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(cell_w, 25.0), egui::Sense::click());
-    ui.painter().text(
-        egui::pos2(rect.min.x, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        name,
-        proportional(shell.scale.micro),
-        shell.t2(),
-    );
+    /// 格子宽（常数，不随列宽漂移）。
+    const CELL_W: f32 = 92.0;
+    /// 行高（web `.layer-row` 25）。
+    const CELL_H: f32 = 25.0;
+    /// toggle 宽（web `.toggle` 25×14）。
+    const TOGGLE_W: f32 = 25.0;
+    /// 名称与 toggle 之间的最小留白。
+    const TOGGLE_GAP: f32 = 6.0;
+
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(CELL_W, CELL_H), egui::Sense::click());
     // toggle（web `.toggle`：25×14、圆角 10；knob 10px，on 时右移 11px 变白）
     let toggle_rect = egui::Rect::from_center_size(
-        egui::pos2(rect.max.x - 14.0, rect.center().y),
-        egui::vec2(25.0, 14.0),
+        egui::pos2(rect.max.x - TOGGLE_W / 2.0, rect.center().y),
+        egui::vec2(TOGGLE_W, 14.0),
+    );
+    // 名称：测量 + 裁剪，绝不越进 toggle 区（见函数文档）。
+    let text_right = toggle_rect.min.x - TOGGLE_GAP;
+    let label_color = shell.t2();
+    let galley = ui.painter().layout_no_wrap(
+        name.to_owned(),
+        proportional(shell.scale.micro),
+        label_color,
+    );
+    let max_w = (text_right - rect.min.x).max(0.0);
+    let clip = (galley.size().x > max_w).then(|| {
+        egui::Rect::from_min_max(
+            egui::pos2(rect.min.x, rect.min.y),
+            egui::pos2(rect.min.x + max_w, rect.max.y),
+        )
+    });
+    let painter = ui.painter().with_clip_rect(clip.unwrap_or(rect));
+    painter.galley(
+        egui::pos2(rect.min.x, rect.center().y - galley.size().y / 2.0),
+        galley,
+        label_color,
     );
     let painter = ui.painter();
     painter.rect_filled(
