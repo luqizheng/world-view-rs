@@ -90,6 +90,28 @@ const ERASER_TOLERANCE_WU: f32 = 8.0;
 /// 长度 / 面积文字的屏幕像素基准（2026-10-14 用户反馈 10 px 偏小，加到 13 px）。
 const LABEL_PX: f32 = 13.0;
 
+/// **最短量测长度**（**屏幕像素**）：短于此值不生成量测、也不显示读数。
+///
+/// 2026-11-02 用户裁定：同一点反复点击会生成「一大堆尺子」（每次点击对
+/// 落一条两点量测，同像素点也照生成）——读数区于是堆满 `0.0 wu / (0.00 km)`
+/// 与 `Σ 0.0 wu` 的噪声。规则：**短于 10 屏幕像素的量测不存在**。
+///
+/// 阈值按**屏幕像素**而非世界单位——世界单位阈值会随缩放漂移（拉近时
+/// 「同一点」的物理距离也变大，会漏判）。换算靠 `view.scale`
+/// （世界单位 / 屏幕像素），与 `label_world = LABEL_PX * view.scale` 同源。
+///
+/// 双重处置：
+/// - **提交侧**：过短的段 / 过窄的矩形**不创建**（不写进工程 YAML）；
+/// - **显示侧**：已存的老量测**不画读数**（老工程里那堆同点尺子也清净）。
+const MIN_MEASURE_LEN_PX: f32 = 10.0;
+
+/// 最短量测长度（世界单位）= 屏幕像素阈值 × 每像素世界单位。
+///
+/// `scale` = `view.scale`（世界单位 / 屏幕像素）。
+pub(crate) fn min_measure_len_wu(scale: f32) -> f32 {
+    MIN_MEASURE_LEN_PX * scale
+}
+
 /// 折线标签（"段长" / "总长" / "长×宽=面积"）。
 #[derive(Component)]
 pub struct MeasureLabel;
@@ -193,6 +215,8 @@ pub fn render_measurements(
     // 顶置不受 LayerFrame.z_offset 漂移影响——这是用户原话「最上层」的强约束。
 
     let label_world = (LABEL_PX * view.scale).max(0.05);
+    // 最短量测长度（世界单位）——随缩放走，判定与提交侧同口径。
+    let min_len = min_measure_len_wu(view.scale);
     // 屏幕对齐：取相机旋转的逆，让标签永远水平（与街道标注同款）。
     let label_rot = camera
         .single()
@@ -225,6 +249,10 @@ pub fn render_measurements(
                     let a = Vec2::new(w[0].x, w[0].y);
                     let b = Vec2::new(w[1].x, w[1].y);
                     let seg_len = (b - a).length();
+                    // 过短的段不显示读数（老工程里已存的小尺子也清净）。
+                    if seg_len < min_len {
+                        continue;
+                    }
                     let mid = grid.map_to_view((a + b) * 0.5);
                     wanted.push((mid, format_length_label(seg_len, km_factor), 1));
                 }
@@ -238,11 +266,10 @@ pub fn render_measurements(
                     (a + b) * 0.5
                 });
                 let above = first_mid + Vec2::new(0.0, label_world * 2.6);
-                wanted.push((
-                    above,
-                    format_total_length_label(m.total_length(), km_factor),
-                    0,
-                ));
+                let total = m.total_length();
+                if total >= min_len {
+                    wanted.push((above, format_total_length_label(total, km_factor), 0));
+                }
             }
             MeasurementKind::Rectangle => {
                 if m.points.len() != 2 {
@@ -252,6 +279,10 @@ pub fn render_measurements(
                 let b = Vec2::new(m.points[1].x, m.points[1].y);
                 let dx = (b.x - a.x).abs();
                 let dy = (b.y - a.y).abs();
+                // 过窄的矩形不显示读数。
+                if dx < min_len || dy < min_len {
+                    continue;
+                }
                 let mid = grid.map_to_view((a + b) * 0.5);
                 wanted.push((mid, format_rectangle_label(dx, dy, km_factor), 0));
             }
@@ -263,6 +294,9 @@ pub fn render_measurements(
             let a = w[0];
             let b = w[1];
             let seg_len = (b - a).length();
+            if seg_len < min_len {
+                continue;
+            }
             let mid = grid.map_to_view((a + b) * 0.5);
             wanted.push((mid, format_length_label(seg_len, km_factor), 2));
         }
@@ -275,11 +309,13 @@ pub fn render_measurements(
                 .map(|w| (w[1] - w[0]).length())
                 .sum();
             let first_mid = grid.map_to_view((a + b) * 0.5);
-            wanted.push((
-                first_mid + Vec2::new(0.0, label_world * 2.6),
-                format_total_length_label(total, km_factor),
-                2,
-            ));
+            if total >= min_len {
+                wanted.push((
+                    first_mid + Vec2::new(0.0, label_world * 2.6),
+                    format_total_length_label(total, km_factor),
+                    2,
+                ));
+            }
         }
     }
 
@@ -673,6 +709,12 @@ pub fn commit_measurement_click(
             }
             // 第二次起：提交「上一段 → 本段」= 折线一条。
             let prev = *measure.draft.last().expect("已保证非空");
+            // 退化段（同点连击）**不提交**（2026-11-02 用户裁定「0 的不要出现」）：
+            // 零长量测只会在读数区显示 0.0 / 0.00 km，还会写进工程 YAML 变垃圾。
+            // 不推意图 → 不排回执 → 草稿不推进，下一笔仍从原起点接。
+            if (local - prev).length() < min_measure_len_wu(view.scale) {
+                return;
+            }
             let seg = wv_core::Measurement::polyline(vec![
                 wv_core::Point::new(prev.x, prev.y),
                 wv_core::Point::new(local.x, local.y),
@@ -699,6 +741,11 @@ pub fn commit_measurement_click(
             }
             // 第二次点击：提交矩形并清草稿。
             let prev = *measure.draft.last().expect("已保证非空");
+            // 退化矩形（同点连击）不提交——理由同 Line 分支的零长段。
+            let min_len = min_measure_len_wu(view.scale);
+            if (local.x - prev.x).abs() < min_len || (local.y - prev.y).abs() < min_len {
+                return;
+            }
             let m = wv_core::Measurement::rectangle(
                 wv_core::Point::new(prev.x, prev.y),
                 wv_core::Point::new(local.x, local.y),
@@ -1217,6 +1264,21 @@ mod tests {
         };
         st.on_map_change(Some(&wv_core::Id::new_unchecked("m1")));
         assert_eq!(st.draft.len(), 1, "同图不清草稿");
+    }
+
+    /// 最短量测长度阈值按**屏幕像素**换算（用户裁定：同一点反复点击会生成
+    /// 一大堆尺子，短于 10 像素的不该存在）。
+    ///
+    /// 关键在**随缩放走**：世界单位阈值会漏判（拉近时同一点的物理距离也变大）。
+    #[test]
+    fn min_measure_len_scales_with_zoom() {
+        // scale = 世界单位 / 屏幕像素。10 px 阈值随 scale 线性换算。
+        assert!((min_measure_len_wu(0.4) - 4.0).abs() < 1e-4);
+        assert!((min_measure_len_wu(1.0) - 10.0).abs() < 1e-4);
+        assert!((min_measure_len_wu(4.0) - 40.0).abs() < 1e-4);
+        // 拉近时阈值随之放大（世界单位）——远观 4 wu 算短，拉近到 4 wu/px 时不算。
+        assert!(4.0 < min_measure_len_wu(1.0));
+        assert!(4.0 >= min_measure_len_wu(0.4));
     }
 
     /// 叠放的读数块必须被推开（用户实拍：三条读数糊成一团）。
