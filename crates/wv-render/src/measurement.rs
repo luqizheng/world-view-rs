@@ -24,7 +24,10 @@
 
 #![cfg(feature = "app")]
 
+use bevy::math::primitives::Circle;
+use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
+use bevy::sprite::Anchor;
 
 use wv_core::{Measurement, MeasurementKind, MeasurementOverlay};
 
@@ -112,22 +115,91 @@ pub(crate) fn min_measure_len_wu(scale: f32) -> f32 {
     MIN_MEASURE_LEN_PX * scale
 }
 
+/// 测量读数面板的**配色**（UI 令牌的渲染侧投影）。
+///
+/// 渲染层**不**持 UI 令牌源（ADR-0020 §2.6 同「钻入标记」先例）：应用层每帧
+/// 把 wv-ui 公共组件 `selected_object_label` 的配色灌进本资源
+/// （`wv-app::render_bridge::sync_measure_label_style`），渲染只读。
+///
+/// 默认值 = 暗色档（占位）：同步系统排在绘制之前，首帧即被覆盖。
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct MeasureLabelStyle {
+    /// 面板底色（含 95% 不透明度）。
+    pub panel: Color,
+    /// 面板描边色（金）。
+    pub border: Color,
+    /// 指示点色（金）。
+    pub indicator: Color,
+    /// 文字色。
+    pub text: Color,
+}
+
+impl Default for MeasureLabelStyle {
+    fn default() -> Self {
+        Self {
+            panel: Color::srgba(0.090, 0.145, 0.176, 0.95),
+            border: Color::srgb(0.839, 0.718, 0.482),
+            indicator: Color::srgb(0.839, 0.718, 0.482),
+            text: Color::srgb(0.890, 0.910, 0.920),
+        }
+    }
+}
+
+/// 圆角矩形网格（三角扇）——Figma「Selected object label」面板用。
+///
+/// Bevy 的 `Mesh2d` 没有描边也没有圆角，故面板由两块网格叠出：**大一圈的
+/// 同形圆角矩形（金）垫在下层**做描边，**本体圆角矩形（面板底色）**在上层。
+///
+/// 圆角用 4 段弧近似（每角 4 段 = 16 边形），足够 5 px 半径的观感。
+fn rounded_rect_mesh(w: f32, h: f32, r: f32) -> Mesh {
+    const ARC_SEGMENTS: usize = 4;
+    let hw = w * 0.5;
+    let hh = h * 0.5;
+    let r = r.clamp(0.0, hw.min(hh));
+    // 四角圆心（逆时针：右下 → 右上 → 左上 → 左下）。
+    let centers = [
+        Vec2::new(hw - r, -hh + r),
+        Vec2::new(hw - r, hh - r),
+        Vec2::new(-hw + r, hh - r),
+        Vec2::new(-hw + r, -hh + r),
+    ];
+    let mut points: Vec<Vec2> = Vec::with_capacity(4 * (ARC_SEGMENTS + 1));
+    for (ci, c) in centers.iter().enumerate() {
+        // 每角的起始角：右下 -90° → 0°，右上 0° → 90°，左上 90° → 180°，
+        // 左下 180° → 270°。
+        let start = -std::f32::consts::FRAC_PI_2 + ci as f32 * std::f32::consts::FRAC_PI_2;
+        for s in 0..=ARC_SEGMENTS {
+            let a = start + s as f32 / ARC_SEGMENTS as f32 * std::f32::consts::FRAC_PI_2;
+            points.push(c + Vec2::new(a.cos() * r, a.sin() * r));
+        }
+    }
+    // 三角扇（圆角矩形是凸的，从中心扇出即可）。
+    let n = points.len();
+    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(n + 1);
+    positions.push([0.0, 0.0, 0.0]);
+    for p in &points {
+        positions.push([p.x, p.y, 0.0]);
+    }
+    let mut indices: Vec<u32> = Vec::with_capacity(n * 3);
+    for i in 0..n as u32 {
+        indices.push(0);
+        indices.push(i + 1);
+        indices.push((i + 1) % n as u32 + 1);
+    }
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        bevy::asset::RenderAssetUsages::default(),
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_indices(Indices::U32(indices));
+    mesh
+}
+
 /// 折线标签（"段长" / "总长" / "长×宽=面积"）。
 #[derive(Component)]
 pub struct MeasureLabel;
 
-/// 折线标签的描边阴影（黑色 4 方向实体，撑出 ~2 px 实心描边）。
-///
-/// 与 [`MeasureLabel`] **N : 4** 配对 spawn：每个标签 1 主文字 + 4 阴影实体，
-/// 阴影分别位于主文字的左 / 右 / 上 / 下 1 屏幕 px 处，全不透明黑。
-/// 形成 2 px 厚的描边，让白字在任何底色上都可读——尤其是黄色测量线穿过处
-/// （用户 2026-10-14 反馈：单方向 1 px 半透明黑压不住黄底）。
-///
-/// `z` 比主文字略低，避免遮挡文字本身。
-#[derive(Component)]
-pub struct MeasureLabelShadow;
-
-/// 测量文字标签的暗色背板（半透明黑矩形，铺在文字后一层，挡住穿过的黄线）。
+/// 测量文字标签的面板背板（圆角矩形，铺在文字后一层，挡住穿过的黄线）。
 ///
 /// 与 [`MeasureLabel`] **1 : 1** 配对 spawn：每个标签 1 主文字 + 1 背板实体。
 ///
@@ -135,12 +207,27 @@ pub struct MeasureLabelShadow;
 ///
 /// Bevy 没有 CSS `mix-blend-mode: difference` 等价 API；想达到「文字明显
 /// 盖在黄色线段上」的视觉效果，最简单等效做法就是：**背板在文字与线之间
-/// 铺一块暗色矩形**，让黄线在背板区域被完全遮住。
+/// 铺一块面板**，让黄线在背板区域被完全遮住。
 ///
-/// 视觉等价于 difference：在文字区显示文字+背板，其他地方保留原色。
-/// 渲染代价：每标签 +1 个 mesh 实体 + 1 个 ColorMaterial（小，可接受）。
+/// ## 2026-11-02 改版（Figma「Selected object label」组件）
+///
+/// 旧版是「半透明黑矩形 + 白字 + 4 份黑描边」——暗底糊字、厚描边让文字
+/// 显脏。现按 wv-ui 的 `selected_object_label` 公共组件规格重画：
+/// 圆角面板 + 1px 金描边 + 左侧金指示点 + 主题文字色；**4 份黑描边撤掉**
+/// （面板本身已提供对比度）。
 #[derive(Component)]
 pub struct MeasureLabelPlate;
+
+/// 面板的金描边（比背板大一圈的金色圆角矩形，垫在背板之下）。
+///
+/// 描边不进 mesh（Bevy 的 `Mesh2d` 无描边），做法是「更大一圈的同形圆角
+/// 矩形画在下层」——露出的那圈边即是描边。
+#[derive(Component)]
+pub struct MeasureLabelBorder;
+
+/// 面板左侧的金色指示点（5 px 圆点，Figma 的 Selection indicator）。
+#[derive(Component)]
+pub struct MeasureLabelDot;
 
 /// 测量叠加的渲染入口（**顶置**，无 LayerFrame 联动）。
 ///
@@ -164,53 +251,66 @@ pub fn render_measurements(
     grid: Res<GridConfig>,
     view: Res<ViewState>,
     fonts: Res<crate::theme::fonts::LoadedFonts>,
+    style: Res<MeasureLabelStyle>,
     camera: Query<&Transform, With<Camera2d>>,
     projection: Res<WorldProjection>,
     drill: Res<DrillState>,
-    mut q_main: Query<
-        (
-            Entity,
-            &mut Transform,
-            &mut Text2d,
-            &mut TextFont,
-            &mut TextColor,
-            &mut Visibility,
-        ),
-        (
-            With<MeasureLabel>,
-            Without<MeasureLabelShadow>,
-            Without<MeasureLabelPlate>,
-            Without<Camera2d>,
-            Without<StreetLabel>,
-        ),
-    >,
-    mut q_plate: Query<
-        (Entity, &mut Transform, &mut Mesh2d, &mut Visibility),
-        (
-            With<MeasureLabelPlate>,
-            Without<MeasureLabel>,
-            Without<MeasureLabelShadow>,
-            Without<Camera2d>,
-            Without<StreetLabel>,
-        ),
-    >,
-    mut q_shadow: Query<
-        (
-            Entity,
-            &mut Transform,
-            &mut Text2d,
-            &mut TextFont,
-            &mut TextColor,
-            &mut Visibility,
-        ),
-        (
-            With<MeasureLabelShadow>,
-            Without<MeasureLabel>,
-            Without<MeasureLabelPlate>,
-            Without<Camera2d>,
-            Without<StreetLabel>,
-        ),
-    >,
+    // 四个查询折成**一个元组参数**（Bevy 单系统 16 参数上限：拆成 4 个
+    // Query 会到 17）。
+    (mut q_main, mut q_plate, mut q_border, mut q_dot): (
+        Query<
+            (
+                Entity,
+                &mut Transform,
+                &mut Text2d,
+                &mut TextFont,
+                &mut TextColor,
+                &mut Anchor,
+                &mut Visibility,
+            ),
+            (
+                With<MeasureLabel>,
+                Without<MeasureLabelPlate>,
+                Without<MeasureLabelBorder>,
+                Without<MeasureLabelDot>,
+                Without<Camera2d>,
+                Without<StreetLabel>,
+            ),
+        >,
+        Query<
+            (Entity, &mut Transform, &mut Mesh2d, &mut Visibility),
+            (
+                With<MeasureLabelPlate>,
+                Without<MeasureLabel>,
+                Without<MeasureLabelBorder>,
+                Without<MeasureLabelDot>,
+                Without<Camera2d>,
+                Without<StreetLabel>,
+            ),
+        >,
+        Query<
+            (Entity, &mut Transform, &mut Mesh2d, &mut Visibility),
+            (
+                With<MeasureLabelBorder>,
+                Without<MeasureLabel>,
+                Without<MeasureLabelPlate>,
+                Without<MeasureLabelDot>,
+                Without<Camera2d>,
+                Without<StreetLabel>,
+            ),
+        >,
+        Query<
+            (Entity, &mut Transform, &mut Mesh2d, &mut Visibility),
+            (
+                With<MeasureLabelDot>,
+                Without<MeasureLabel>,
+                Without<MeasureLabelPlate>,
+                Without<MeasureLabelBorder>,
+                Without<Camera2d>,
+                Without<StreetLabel>,
+            ),
+        >,
+    ),
 ) {
     // 顶置不受 LayerFrame.z_offset 漂移影响——这是用户原话「最上层」的强约束。
 
@@ -295,16 +395,8 @@ pub fn render_measurements(
     }
     // ---- 草稿预览标签 ----
     if measure.mode != MeasureMode::Off && !measure.draft.is_empty() {
-        for w in measure.draft.windows(2) {
-            let a = w[0];
-            let b = w[1];
-            let seg_len = (b - a).length();
-            if seg_len < min_len {
-                continue;
-            }
-            let mid = grid.map_to_view((a + b) * 0.5);
-            wanted.push((mid, format_length_label(seg_len, km_factor), 2));
-        }
+        // 草稿的**分段读数不画**：每段都已提交为独立量测并自带读数（重复）。
+        // 草稿只贡献下面的「总长」——那是各段量测里没有的唯一信息。
         // 草稿同规：两点（单段）不出总长读数——避免与段长读数并排重复。
         if measure.draft.len() >= 2 && wants_total_label(measure.draft.len() - 1) {
             let a = measure.draft[0];
@@ -327,14 +419,8 @@ pub fn render_measurements(
 
     let font_size = label_world;
     let cjk = fonts.label_handle();
-    let label_color = bevy::color::Color::WHITE;
-    // 描边：全不透明黑（2026-10-14 用户反馈：半透明黑压不住黄底）。
-    let shadow_color = bevy::color::Color::srgba(0.0, 0.0, 0.0, 1.0);
-    // 4 方向描边（上下左右），每个方向 1 屏幕 px；屏幕 1 px = `view.scale` 世界单位。
-    // 4 个方向叠加 → ~2 px 实心描边，让白字在任何底色（绿底/黄线）上都清晰。
-    const SHADOW_OFFSETS: [(f32, f32); 4] = [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)];
 
-    // ---- 文字标签对象池（主 + 描边 + 背板）----
+    // ---- 文字标签对象池（主文字 + 面板 + 描边 + 指示点）----
     // 每个 wanted 标签需要：
     // - 1 main 文字
     // - 4 shadow 文字（4 方向描边）
@@ -353,17 +439,73 @@ pub fn render_measurements(
     let placements: Vec<(Vec2, &str)> = place_labels(&wanted, font_size);
 
     let mut iter_main = q_main.iter_mut();
-    let mut iter_shadow = q_shadow.iter_mut();
     let mut iter_plate = q_plate.iter_mut();
-    let plate_color = bevy::color::Color::srgba(0.0, 0.0, 0.0, 0.85);
+    let mut iter_border = q_border.iter_mut();
+    let mut iter_dot = q_dot.iter_mut();
+
+    // ── Figma「Selected object label」组件规格（wv-ui 公共组件）──
+    //
+    // 度量取自组件（屏幕像素），换算到世界单位靠 `view.scale`（世界单位 / 屏幕像素）：
+    // 面板高 30 / 圆角 5 / 左右 padding 10 / 指示点 5 / 指示点与文字间距 8 / 描边 1。
+    // 文字行高按**实际行数**撑（测量的读数是两行：wu + km），故面板高取
+    // 「组件高度」与「文字高度 + 上下留白」的较大者。
+    const PX_PADDING_H: f32 = 10.0;
+    const PX_GAP: f32 = 8.0;
+    const PX_INDICATOR: f32 = 5.0;
+    const PX_RADIUS: f32 = 5.0;
+    const PX_BORDER: f32 = 1.0;
+    const PX_MIN_HEIGHT: f32 = 30.0;
+    const PX_TEXT_PAD_V: f32 = 4.0;
+
+    let px = view.scale.max(1e-6); // 世界单位 / 屏幕像素
     for (pos, text) in &placements {
         let text: &str = text;
 
-        // 0. 背板（在文字与线之间，z = MEASURE_Z + 0.3 — 高于线 z=0，低于字 z=0.5）。
-        let plate_size = estimate_text_world_size(text, font_size);
-        let plate_mesh = meshes.add(Rectangle::new(plate_size.x, plate_size.y));
+        // 文字块尺寸（估算，与背板同源）→ 面板尺寸。
+        let text_size = estimate_text_world_size(text, font_size);
+        let pad_h = PX_PADDING_H * px;
+        let panel_w = text_size.x + pad_h * 2.0 + PX_INDICATOR * px + PX_GAP * px;
+        let panel_h = (PX_MIN_HEIGHT * px).max(text_size.y + PX_TEXT_PAD_V * px * 2.0);
+        let radius = PX_RADIUS.min(panel_h * 0.5).min(panel_w * 0.5);
+
+        // 面板左缘（文字左对齐排在指示点之后，Figma 布局）。
+        let left = pos.x - panel_w * 0.5;
+        let text_x = left + pad_h + PX_INDICATOR * px + PX_GAP * px;
+
+        // 0. 金描边（比面板大一圈，垫在下层——露出的那圈边即是 1px 描边）。
+        let border_size = Vec2::new(
+            panel_w + PX_BORDER * px * 2.0,
+            panel_h + PX_BORDER * px * 2.0,
+        );
+        let border_mesh = meshes.add(rounded_rect_mesh(border_size.x, border_size.y, radius));
+        let border_material = materials.add(ColorMaterial {
+            color: style.border,
+            ..Default::default()
+        });
+        if let Some((_, mut tf, mut m, mut vis)) = iter_border.next() {
+            tf.translation = pos.extend(MEASURE_Z + 0.25);
+            tf.rotation = label_rot;
+            tf.scale = Vec3::ONE;
+            *m = Mesh2d(border_mesh);
+            *vis = Visibility::Visible;
+        } else {
+            commands.spawn((
+                MeasureLabelBorder,
+                Mesh2d(border_mesh),
+                MeshMaterial2d(border_material),
+                Transform {
+                    translation: pos.extend(MEASURE_Z + 0.25),
+                    rotation: label_rot,
+                    ..Default::default()
+                },
+                Visibility::Visible,
+            ));
+        }
+
+        // 1. 面板背板（圆角，主题底色 @95%；挡住穿过的黄线）。
+        let plate_mesh = meshes.add(rounded_rect_mesh(panel_w, panel_h, radius));
         let plate_material = materials.add(ColorMaterial {
-            color: plate_color,
+            color: style.panel,
             ..Default::default()
         });
         if let Some((_, mut tf, mut m, mut vis)) = iter_plate.next() {
@@ -386,29 +528,27 @@ pub fn render_measurements(
             ));
         }
 
-        // 1. 主文字（白色，z = MEASURE_Z + 0.5，确保明显压在线之上）
-        if let Some((_, mut tf, mut t, mut style, mut color, mut vis)) = iter_main.next() {
-            tf.translation = pos.extend(MEASURE_Z + 0.5);
+        // 2. 金指示点（面板左侧，Figma 的 Selection indicator）。
+        let dot_r = PX_INDICATOR * px * 0.5;
+        let dot_c = Vec2::new(left + pad_h + dot_r, pos.y);
+        let dot_mesh = meshes.add(Circle::new(dot_r).mesh().resolution(16));
+        let dot_material = materials.add(ColorMaterial {
+            color: style.indicator,
+            ..Default::default()
+        });
+        if let Some((_, mut tf, mut m, mut vis)) = iter_dot.next() {
+            tf.translation = dot_c.extend(MEASURE_Z + 0.45);
             tf.rotation = label_rot;
-            *t = Text2d::new(text.to_string());
-            style.font_size = font_size.into();
-            if let Some(f) = &cjk {
-                style.font = f.clone().into();
-            }
-            *color = TextColor(label_color);
+            tf.scale = Vec3::ONE;
+            *m = Mesh2d(dot_mesh);
             *vis = Visibility::Visible;
         } else {
             commands.spawn((
-                MeasureLabel,
-                Text2d::new(text.to_string()),
-                TextFont {
-                    font_size: font_size.into(),
-                    font: cjk.clone().unwrap_or_default().into(),
-                    ..Default::default()
-                },
-                TextColor(label_color),
+                MeasureLabelDot,
+                Mesh2d(dot_mesh),
+                MeshMaterial2d(dot_material),
                 Transform {
-                    translation: pos.extend(MEASURE_Z + 0.5),
+                    translation: dot_c.extend(MEASURE_Z + 0.45),
                     rotation: label_rot,
                     ..Default::default()
                 },
@@ -416,47 +556,56 @@ pub fn render_measurements(
             ));
         }
 
-        // 2. 描边阴影（4 方向 1 像素，全不透明黑，z = MEASURE_Z + 0.4 — 紧贴主字下层）
-        for (dx, dy) in SHADOW_OFFSETS {
-            let shadow_pos = pos + Vec2::new(dx * view.scale, dy * view.scale);
-            if let Some((_, mut tf, mut t, mut style, mut color, mut vis)) = iter_shadow.next() {
-                tf.translation = shadow_pos.extend(MEASURE_Z + 0.4);
-                tf.rotation = label_rot;
-                *t = Text2d::new(text.to_string());
-                style.font_size = font_size.into();
-                if let Some(f) = &cjk {
-                    style.font = f.clone().into();
-                }
-                *color = TextColor(shadow_color);
-                *vis = Visibility::Visible;
-            } else {
-                commands.spawn((
-                    MeasureLabelShadow,
-                    Text2d::new(text.to_string()),
-                    TextFont {
-                        font_size: font_size.into(),
-                        font: cjk.clone().unwrap_or_default().into(),
-                        ..Default::default()
-                    },
-                    TextColor(shadow_color),
-                    Transform {
-                        translation: shadow_pos.extend(MEASURE_Z + 0.4),
-                        rotation: label_rot,
-                        ..Default::default()
-                    },
-                    Visibility::Visible,
-                ));
+        // 3. 主文字（主题文字色，左对齐排在指示点之后；面板已提供对比度，
+        //    不再需要旧版的 4 份黑描边）。
+        if let Some((_, mut tf, mut t, mut style_fs, mut color, mut anchor, mut vis)) =
+            iter_main.next()
+        {
+            tf.translation = Vec2::new(text_x, pos.y).extend(MEASURE_Z + 0.5);
+            tf.rotation = label_rot;
+            *t = Text2d::new(text.to_string());
+            // 文字**左对齐**排在指示点之后（Figma 布局）；Bevy 0.19 的 2D 文本
+            // 默认居中锚点，不改会盖住金点。
+            *anchor = Anchor::CENTER_LEFT;
+            style_fs.font_size = font_size.into();
+            if let Some(f) = &cjk {
+                style_fs.font = f.clone().into();
             }
+            *color = TextColor(style.text);
+            *vis = Visibility::Visible;
+        } else {
+            commands.spawn((
+                MeasureLabel,
+                Text2d::new(text.to_string()),
+                Anchor::CENTER_LEFT,
+                TextFont {
+                    font_size: font_size.into(),
+                    font: cjk.clone().unwrap_or_default().into(),
+                    ..Default::default()
+                },
+                TextColor(style.text),
+                Transform {
+                    translation: Vec2::new(text_x, pos.y).extend(MEASURE_Z + 0.5),
+                    rotation: label_rot,
+                    ..Default::default()
+                },
+                Visibility::Visible,
+            ));
         }
     }
     // 池里多出的实体隐藏（复用，不 despawn）。
-    for (_, mut _tf, mut _t, mut _s, mut _c, mut vis) in iter_main {
-        *vis = Visibility::Hidden;
-    }
-    for (_, mut _tf, mut _t, mut _s, mut _c, mut vis) in iter_shadow {
+    for (_, mut _tf, mut _t, mut _s, mut _c, mut _a, mut vis) in iter_main {
         *vis = Visibility::Hidden;
     }
     for (_, mut _tf, mut _m, mut vis) in iter_plate {
+        let _ = _m;
+        *vis = Visibility::Hidden;
+    }
+    for (_, mut _tf, mut _m, mut vis) in iter_border {
+        let _ = _m;
+        *vis = Visibility::Hidden;
+    }
+    for (_, mut _tf, mut _m, mut vis) in iter_dot {
         let _ = _m;
         *vis = Visibility::Hidden;
     }
@@ -497,14 +646,10 @@ pub fn render_measurements(
             }
         }
     }
-    // 草稿已固定的段（同色减半）。
-    for w in measure.draft.windows(2) {
-        gizmos.line_2d(
-            grid.map_to_view(w[0]),
-            grid.map_to_view(w[1]),
-            draft_color_dim,
-        );
-    }
+    // 草稿**不再重画已固定的段**（2026-11-02 用户实拍：每段读数出现两次）——
+    // 折线模式下每次点击都会把「上一段 → 本段」提交成一条独立量测（缓存里
+    // 已按亮色画过），草稿只负责累加点；重画等于同一条线画两遍。
+    // 草稿只留下面的橡皮筋（末段 → 光标）。
     // 草稿橡皮筋（末段 → 光标）：仅 Line / Rect 模式有。
     if (measure.mode == MeasureMode::Line || measure.mode == MeasureMode::Rect)
         && !measure.draft.is_empty()

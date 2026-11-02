@@ -136,6 +136,8 @@ pub(super) fn insert_all(app: &mut App, config: &AppConfig, center: Vec2, fit_sc
     .init_resource::<wv_render::editing_bridge::EditReceipts>()
     .init_resource::<wv_render::streets::StreetCommitAcks>()
     .init_resource::<wv_render::measurement::MeasureCommitAcks>()
+    // 测量读数面板配色（UI 令牌的渲染侧投影；每帧由 render_bridge 灌）。
+    .init_resource::<wv_render::measurement::MeasureLabelStyle>()
     // 校验面板 / 笔触提交 / 撤销重做 / 打开工程都读写它（`ResMut` 访问
     // 不存在的资源会在首帧 panic → 窗口无法显示）。`derive(Default)` 起步。
     .init_resource::<crate::state::ProjectDiagnostics>()

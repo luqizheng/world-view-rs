@@ -47,6 +47,7 @@ pub mod floater;
 pub mod layer_panel;
 pub mod primitives;
 pub mod segmented_control;
+pub mod selected_object_label;
 pub mod split_button;
 pub mod svg_loader;
 #[cfg(test)]
@@ -170,6 +171,10 @@ pub use primitives::{
     RECENT_ROW_H,
     RECENT_ROW_ICON,
     RECENT_ROW_PAD_X,
+};
+pub use selected_object_label::{
+    paint as paint_selected_object_label, SelectedObjectLabelColors, SelectedObjectLabelMetrics,
+    PANEL_ALPHA as SELECTED_OBJECT_LABEL_PANEL_ALPHA,
 };
 pub use split_button::{split_button, ChevronSide, SplitButtonMetrics, SplitMenuItem};
 pub use svg_loader::{install_svg_decoder, setup_egui_image_loaders, EguiImageLoadersInstalled};
