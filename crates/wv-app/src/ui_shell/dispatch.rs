@@ -460,10 +460,16 @@ pub(crate) fn apply_pending_commands(
             // 工作区退出编排排的 `SelectMapTool(EditCell)` 就是关动作，拦了
             // 它会把退出搞成半残 + 弹一条无端报错。
             if !tool.available_in(view.mode) && !already_on {
-                notice.error(
-                    "该工具不在当前工作区（CellMap 编辑工具请先切到 CellMap）",
-                    240,
-                );
+                // 文案按**方向**分两句：原措辞写死了「CellMap 编辑工具请先切到
+                // CellMap」，在 CellMap 里点别的档工具时自相矛盾（2026-11-02 用户
+                // 实测踩到）。改为中性措辞 + 按模式给方向。
+                let msg = match view.mode {
+                    crate::state::ViewMode::Topographic => {
+                        "该工具不在当前工作区（此工具请在浏览 / 地图档使用）"
+                    }
+                    _ => "该工具不在当前工作区（CellMap 编辑工具请先切到 CellMap）",
+                };
+                notice.error(msg, 240);
                 return;
             }
 

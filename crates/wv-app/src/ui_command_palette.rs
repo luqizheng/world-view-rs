@@ -250,7 +250,9 @@ impl MapToolId {
     /// 面板隐藏、分发器终审四处置共用本表，不各自重拼：
     ///
     /// - **Browse / Map**（叙事与政治图档）：抓手、点选（实体选择器，
-    ///   ADR-0090 D2）、测量（Map 是距离主场）——圈选已收编 CellMap；
+    ///   ADR-0090 D2）——圈选已收编 CellMap；
+    /// - **测量**（线段 / 矩形 / 橡皮）：**三档通用**（Browse / Map / CellMap）——
+    ///   2026-11-02 用户裁定放开 CellMap（地形工作台同样要量距离）；
     /// - **CellMap**（Topographic 地形工作台）：圈选（格子选择器，ADR-0090
     ///   D3）+ 地形编辑全家（笔刷/橡皮/单格/群系分界/大陆生成）+ 地标放置
     ///   （POI 编辑主场）；
@@ -267,7 +269,14 @@ impl MapToolId {
             // 生成大陆本就 Topographic-only、划分势力走独立切手势，收编无断链）。
             Self::Select(_) => mode == ViewMode::Topographic,
             Self::MeasureLine | Self::MeasureRect | Self::MeasureEraser => {
-                matches!(mode, ViewMode::VectorFlat | ViewMode::GoogleMap)
+                // 测量是**跨工作区通用**工具（Browse / Map / CellMap 三档都可量）：
+                // 2026-11-02 用户裁定放开 CellMap——地形工作台同样要量距离
+                // （山脉跨度、渡口间距）。测量管线本身无模式门，只这一处白名单
+                // 挡着（此前 CellMap 点测量 = 分发器终审拒绝 = 「按了没反应」）。
+                matches!(
+                    mode,
+                    ViewMode::VectorFlat | ViewMode::GoogleMap | ViewMode::Topographic
+                )
             }
             Self::LinePoi(_) => mode == ViewMode::GoogleMap,
             Self::Brush
@@ -1083,8 +1092,8 @@ mod tests {
         ] {
             assert!(t.available_in(ViewMode::VectorFlat) && t.available_in(ViewMode::GoogleMap));
             assert!(
-                !t.available_in(ViewMode::Topographic),
-                "CellMap 不要测量叠加"
+                t.available_in(ViewMode::Topographic),
+                "CellMap 也应可用测量（2026-11-02 用户裁定：地形工作台同样要量距离）"
             );
         }
         assert!(MapToolId::LinePoi(LineKind::River).available_in(ViewMode::GoogleMap));
