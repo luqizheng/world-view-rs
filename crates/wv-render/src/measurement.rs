@@ -256,19 +256,24 @@ pub fn render_measurements(
                     let mid = grid.map_to_view((a + b) * 0.5);
                     wanted.push((mid, format_length_label(seg_len, km_factor), 1));
                 }
-                // 总长标在首段中点**上方**——偏移量须让开首段标签的**整块文字**
-                // （两行文字半高 ≈ 1.15 × 字高）：旧的 1.2 × 字高只让开了
-                // 一行，两块标签直接叠在一起（2026-11-02 用户实拍「字体混在
-                // 一起」）。2.6 × 字高 = 首段块顶 + 总长块半高 + 余量。
-                let first_mid = grid.map_to_view({
-                    let a = Vec2::new(m.points[0].x, m.points[0].y);
-                    let b = Vec2::new(m.points[1].x, m.points[1].y);
-                    (a + b) * 0.5
-                });
-                let above = first_mid + Vec2::new(0.0, label_world * 2.6);
-                let total = m.total_length();
-                if total >= min_len {
-                    wanted.push((above, format_total_length_label(total, km_factor), 0));
+                // 总长读数**只在多点折线**出现（2026-11-02 用户实拍：只画两点
+                // 却得到两个一模一样的读数——两点 = 一段 = 段长 ≡ 总长，Σ 那块
+                // 是纯冗余，且两点量测本就该读作「两点间的距离」）。
+                if wants_total_label(m.points.len() - 1) {
+                    // 总长标在首段中点**上方**——偏移量须让开首段标签的**整块
+                    // 文字**（两行文字半高 ≈ 1.15 × 字高）：旧的 1.2 × 字高只让
+                    // 开了 一行，两块标签直接叠在一起（用户实拍「字体混在一起」）。
+                    // 2.6 × 字高 = 首段块顶 + 总长块半高 + 余量。
+                    let first_mid = grid.map_to_view({
+                        let a = Vec2::new(m.points[0].x, m.points[0].y);
+                        let b = Vec2::new(m.points[1].x, m.points[1].y);
+                        (a + b) * 0.5
+                    });
+                    let above = first_mid + Vec2::new(0.0, label_world * 2.6);
+                    let total = m.total_length();
+                    if total >= min_len {
+                        wanted.push((above, format_total_length_label(total, km_factor), 0));
+                    }
                 }
             }
             MeasurementKind::Rectangle => {
@@ -300,7 +305,8 @@ pub fn render_measurements(
             let mid = grid.map_to_view((a + b) * 0.5);
             wanted.push((mid, format_length_label(seg_len, km_factor), 2));
         }
-        if measure.draft.len() >= 2 {
+        // 草稿同规：两点（单段）不出总长读数——避免与段长读数并排重复。
+        if measure.draft.len() >= 2 && wants_total_label(measure.draft.len() - 1) {
             let a = measure.draft[0];
             let b = measure.draft[1];
             let total: f32 = measure
@@ -916,6 +922,17 @@ fn estimate_text_world_size(text: &str, font_world_size: f32) -> Vec2 {
 ///
 /// 无 km： `"5.0"`
 /// 有 km： `"5.0 wu\n(8.2 km)"`（用换行让 km 显示在第二行，避免水平加宽）。
+/// 总长读数是否该出现（纯函数，可单测）。
+///
+/// **两点折线不出总长读数**：两点 = 一个段 = 段长 ≡ 总长，两个读数并排是
+/// 纯冗余（2026-11-02 用户实拍：只画两点却得到两个一模一样的读数），且
+/// 两点量测本就该读作「两点之间的距离」而不是一个 Σ 求和。
+///
+/// 多点折线（≥ 2 段）才出总长——那时「总长」与「各段」是两份不同信息。
+pub(crate) fn wants_total_label(seg_count: usize) -> bool {
+    seg_count >= 2
+}
+
 /// 标签避让摆位（纯函数，可单测）。
 ///
 /// 按优先级（总长/矩形 0 > 分段 1 > 草稿 2）依次落位；与已落位块相撞就
@@ -1264,6 +1281,17 @@ mod tests {
         };
         st.on_map_change(Some(&wv_core::Id::new_unchecked("m1")));
         assert_eq!(st.draft.len(), 1, "同图不清草稿");
+    }
+
+    /// 两点折线只出一个读数（用户实拍：两点画出两个一模一样的读数）。
+    #[test]
+    fn two_point_polyline_has_no_total_label() {
+        assert!(
+            !wants_total_label(1),
+            "单段（两点）不出总长读数——段长 ≡ 总长，重复"
+        );
+        assert!(wants_total_label(2), "多段折线出总长读数");
+        assert!(wants_total_label(5), "多段折线出总长读数");
     }
 
     /// 最短量测长度阈值按**屏幕像素**换算（用户裁定：同一点反复点击会生成
