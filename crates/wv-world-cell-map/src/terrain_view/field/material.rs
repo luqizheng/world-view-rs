@@ -321,8 +321,8 @@ pub struct FieldParams {
     pub shape: Vec4,
     /// 预留（P2 域扭曲开关）。
     pub pad0: Vec4,
-    /// **主光 L₁**：xyz = `crate::shading::LIGHT_MAIN`（方位 315°、高度角 45°
-    /// 的真单位向量，直接 dot 无需归一化）；w = **历史米/格槽，已退役**
+    /// **主光 L₁**：xyz = `crate::shading::LIGHT_MAIN`（方位 315°、高度角
+    /// 38°（ADR-0101）的真单位向量，直接 dot 无需归一化）；w = **历史米/格槽，已退役**
     /// （ADR-0092 起晕渲不再消费——`default_params` 置 0，桥接不再覆写；
     /// 保留槽位只为 uniform 布局稳定）。WGSL 注释与本字段互指。
     pub light_dir: Vec4,
@@ -338,7 +338,8 @@ pub struct FieldParams {
     pub shore_edges: Vec4,
     /// **三光系数**（ADR-0077 D1）：x = `crate::shading::AMBIENT` /
     /// y = `DIFFUSE_MAIN` / z = `DIFFUSE_AUX`（和 = 1；单位光向量下明暗
-    /// `I ∈ [0.4, 1.0]` 界内免费，旧 T17 明暗钳制对已退役）；w 预留。
+    /// 界内免费——真实法线下 `I ∈ [0.33, ≈0.935]`，ADR-0101，旧 T17 明暗
+    /// 钳制对已退役）；w 预留。
     pub relief: Vec4,
     /// 主题四阶色：water / land_low / land_mid / land_high。
     ///
@@ -623,7 +624,7 @@ fn data_texture(
 /// 结果 P2 接线时发现某个旋钮没人接」。
 /// 群系填色强度的中性默认（ADR-0072 T3）——demo / 测试路径用；
 /// 主 App 的真源在 `ThemePack.biome_tint`。
-pub const BIOME_TINT_DEFAULT: f32 = 0.5;
+pub const BIOME_TINT_DEFAULT: f32 = 0.65;
 
 pub fn default_params(
     grid: [f32; 2],
@@ -650,7 +651,8 @@ pub fn default_params(
         // pad0.z = 群系填色强度（ADR-0072 T3）：中性默认 0.5，主 App 由
         // 桥接按 `ThemePack.biome_tint` 覆写。
         pad0: Vec4::new(warp_amp(px_per_cell), 0.0, BIOME_TINT_DEFAULT, 0.0),
-        // 主光 L₁（ADR-0077 D1，真 45° 单位向量，直接 dot）；w = 历史
+        // 主光 L₁（ADR-0077 D1 建制，38° 单位向量 ADR-0101，直接 dot）；
+        // w = 历史
         // 米/格槽，ADR-0092 起晕渲不再消费——恒 0（布局稳定保留）。
         light_dir: Vec4::new(
             crate::shading::LIGHT_MAIN[0],
@@ -691,7 +693,7 @@ pub fn default_params(
         // 取色按段内连续渐变（ADR-0077，镜像 CPU `tint_continuous`）。
         elev_cuts: equal_cuts_uniform(),
         elev_ramp: ramp_uniform(),
-        // 辅光 L₂（ADR-0077 L₂ = shading::LIGHT_AUX，真 45° 单位向量），
+        // 辅光 L₂（ADR-0077 L₂ = shading::LIGHT_AUX，50° 单位向量 ADR-0101），
         // w 预留 0。与主光只差 x 符号——受光盲区互补（见 shading 模块文档）。
         light_aux: Vec4::new(
             crate::shading::LIGHT_AUX[0],
@@ -823,8 +825,9 @@ pub const STRIP_BIT_WASH: u32 = 1 << 2;
 /// alpha）。置 1 = veil alpha 恒 0，**仅当 Themed 分支在场**（分支判据与场
 /// 桥接同一条 `field_branch_of`，不另写布尔式）。
 pub const STRIP_BIT_VEIL: u32 = 1 << 3;
-/// bit4：**浮雕**——三尺度晕渲（WGSL `tri_scale_relief`，系数 = `p.relief`
-/// 三光槽）。置 1 = relief 恒 1.0（平光）。**只影响 Themed 分支**；
+/// bit4：**浮雕**——三尺度晕渲（WGSL `tri_scale_shading`，系数 = `p.relief`
+/// 三光槽）。置 1 = relief 恒 1.0（平光）、山脊高光关闭。**只影响 Themed
+/// 分支**；
 /// BiomeRaw/Flat 分支与水面（明暗只乘陆面）不受影响。
 pub const STRIP_BIT_RELIEF: u32 = 1 << 4;
 

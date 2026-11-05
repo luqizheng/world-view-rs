@@ -315,7 +315,7 @@ pub mod builtin {
         treatment: TreatmentFlags::EMPTY,
         atlas: None,
         sea: PROFESSIONAL,
-        biome_tint: 0.5,
+        biome_tint: 0.65,
         decor: DECOR_PROFESSIONAL,
         // 森林族（ADR-0032 D2 规则键 = 族）：**只留地界晕**。
         //

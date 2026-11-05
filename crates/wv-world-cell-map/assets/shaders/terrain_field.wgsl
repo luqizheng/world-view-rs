@@ -36,7 +36,7 @@ struct FieldParams {
     grid: vec4<f32>,        // xy = 格宽/格高
     shape: vec4<f32>,       // x = px_per_cell, y = branch, z = z_exag（= shading::Z_EXAG，归一化域口径 ADR-0092）, w = 本图高度跨度（作者单位，桥接填 height_span_of）
     pad0: vec4<f32>,
-    light_dir: vec4<f32>,   // xyz = 主光 L₁（= shading::LIGHT_MAIN 真 45° 单位向量）, w = 历史米/格槽（ADR-0092 起退役，恒 0，布局稳定保留）
+    light_dir: vec4<f32>,   // xyz = 主光 L₁（= shading::LIGHT_MAIN 单位向量，38° 仰角 ADR-0101）, w = 历史米/格槽（ADR-0092 起退役，恒 0，布局稳定保留）
     pad1: vec4<f32>,        // .x = WV_STRIP 剥离探针位域（0=全开；Rust 镜像 material.rs STRIP_BIT_*，注释互指）, .y = 海岸编码开关（0=无符号/1=有符号）
     shore_edges: vec4<f32>, // x = 1（滩）, y = 3（浅）, z = 9（深）, w = wash_amt
     relief: vec4<f32>,      // x = AMBIENT, y = DIFFUSE_MAIN, z = DIFFUSE_AUX（= shading:: 三光系数，和 = 1）, w 预留
@@ -50,8 +50,9 @@ struct FieldParams {
     // 8 阶固定色带（低 → 高，线性空间；sRGB 真源在 Rust 侧 hypsometric）
     elev_ramp: array<vec4<f32>, 8>,
     // T5 预载槽 → T6 起正式启用：辅光方向 xyz（= Rust 侧 shading::LIGHT_AUX
-    // 真 45° 单位向量），w 预留。双光源明暗公式在下方（常量镜像 shading.rs，
-    // 注释互指）；std140 尾部追加的布局纪律见 material.rs 同名注释。
+    // 单位向量，50° 仰角，ADR-0101），w 预留。双光源明暗公式在下方（常量
+    // 镜像 shading.rs，注释互指）；std140 尾部追加的布局纪律见 material.rs
+    // 同名注释。
     light_aux: vec4<f32>,
     // 方格平涂分支（CellFlat，ADR-0100 转正默认）：群系真色表（索引 = biome
     // 字节 0..=32；0..=20 冻结群系表 / 21..=32 场景分区表）+ 回退色
@@ -113,19 +114,38 @@ const H_RANGE_M: f32 = 10000.0;
 const DETAIL_RADIUS_CELLS: f32 = 1.0;
 /// 中观档盒平均半径（格）= `shading::MEDIUM_RADIUS_CELLS`。
 const MEDIUM_RADIUS_CELLS: f32 = 3.0;
-/// 宏观档盒平均半径（格）= `shading::MACRO_RADIUS_CELLS`。
-const MACRO_RADIUS_CELLS: f32 = 12.0;
+/// 宏观档盒平均半径（格）= `shading::MACRO_RADIUS_CELLS`（ADR-0101：12→8）。
+const MACRO_RADIUS_CELLS: f32 = 8.0;
 /// 宏观档权重 = `shading::W_MACRO`。三权重和 = 1，混合后免钳制
 ///（与三光系数同一「和=1 免钳制」纪律，见 shading.rs 模块文档）。
-const W_MACRO: f32 = 0.45;
-/// 中观档权重 = `shading::W_MEDIUM`。
-const W_MEDIUM: f32 = 0.40;
-/// detail 档权重（随缩放衰减）= `shading::W_DETAIL`。
-const W_DETAIL: f32 = 0.15;
+/// ADR-0101：0.45→0.35（宏观只管骨架，权重重心移中观）。
+const W_MACRO: f32 = 0.35;
+/// 中观档权重 = `shading::W_MEDIUM`（ADR-0101：0.40→0.45）。
+const W_MEDIUM: f32 = 0.45;
+/// detail 档权重（随缩放衰减）= `shading::W_DETAIL`（ADR-0101：0.15→0.20）。
+const W_DETAIL: f32 = 0.20;
 /// detail 衰减起点（px/格）= `shading::DETAIL_FADE_MIN_PX_PER_CELL`。
 const DETAIL_FADE_MIN_PX_PER_CELL: f32 = 1.0;
 /// detail 衰减终点（px/格）= `shading::DETAIL_FADE_MAX_PX_PER_CELL`。
 const DETAIL_FADE_MAX_PX_PER_CELL: f32 = 3.0;
+
+// ── ADR-0101 新家族（逐值镜像 `shading.rs`，注释互指，改任何一边必须同步
+//    另一边）──────────────────────────────────────────────────────────────
+/// 山脊高光：主光点积门槛 = `shading::RIDGE_DOT_THRESH`。混合法线与主光
+/// 点积超过此值（强受光坡面）才参与高光判定。
+const RIDGE_DOT_THRESH: f32 = 0.80;
+/// 山脊高光：坡度门槛（度）= `shading::RIDGE_SLOPE_DEG`。混合法线坡角
+/// 超过此值（陡坡）才参与高光判定。
+const RIDGE_SLOPE_DEG: f32 = 18.0;
+/// 山脊高光：命中后的线性明度增量 = `shading::RIDGE_BOOST`（灰色向量加法，
+/// 只提亮不漂色相的近似）。
+const RIDGE_BOOST: f32 = 0.06;
+/// LCH 阴影色度补偿上限 = `shading::SHADE_CHROMA_BOOST`。[`lch_hillshade`]
+/// 在最深处给色度 C 追加的最大 Lab 色度量；中性色（C < 1e-4）不补偿。
+const SHADE_CHROMA_BOOST: f32 = 0.12;
+/// 固定海水基色（**sRGB 口径** `#2A5D8F`）= `shading::WATER_SRGB`。使用处
+/// 必须过 [`srgb_to_linear`]——浅滩 / 深海色带由此派生，不再读 `p.theme[0]`。
+const WATER_SRGB: vec3<f32> = vec3<f32>(0.1647059, 0.3647059, 0.5607843);
 
 /// T28：水彩幅度（±7% 明度）。< 0.05 看不出，> 0.12 破坏「色块可辨」。
 const WASH_AMT: f32 = 0.07;
@@ -133,9 +153,6 @@ const WASH_AMT: f32 = 0.07;
 const WASH_FREQ: f32 = 0.45;
 /// T30：沙漠/雪原等大地色系的减免系数。
 const WASH_SPECIAL_K: f32 = 0.5;
-/// Topographic 三阶切点（与 topographic::pick 的 p_low / p_high 同口径）。
-const CUT_LOW: f32 = 0.33;
-const CUT_HIGH: f32 = 0.66;
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
@@ -224,11 +241,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // 行为变化的锚点；采集计划 mask {0,1,2,4,8,16} 每个幂恰剥一层）。
     // 位语义 Rust 镜像 = material.rs 的 STRIP_BIT_* / strip_*_on（真值表
     // 测试在那边；改任何一边必须同步另一边）：
-    //   bit0 剥色板（themed_land → biome_raw_approx）
+    //   bit0 剥色板（高程色带 / 固定水色 → biome_raw_approx）
     //   bit1 剥 soften（**保留位**：场路径无此层，置 1 无画面变化）
     //   bit2 剥 wash（T28 水彩）
     //   bit3 剥 veil（**不在本 shader**——atmosphere 桥的雾 quad 消费）
-    //   bit4 剥浮雕（tri_scale_relief 恒 1.0）
+    //   bit4 剥浮雕（tri_scale_shading 恒 (1,0,1)，山脊高光随之关闭）
     // **只影响 Themed 分支**（shape.y ∈ [0.5, 1.5]）；BiomeRaw/Flat 分支、
     // 水面与墨线一律不读。掩码 ≤ 31 经 f32 精确表示，u32() 无损解码。
     let strip = u32(p.pad1.x);
@@ -240,10 +257,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let hg = sample_height_bicubic_grad(pos);
     let h = mix(hg.x, box_avg_height(pos, footprint), lod_t);
 
-    // ── 明暗：三尺度混合（ADR-0077 D1/D2/D3 · Task 7）────────────────────
+    // ── 明暗：三尺度混合（ADR-0077 D1/D2/D3 建制 · ADR-0101 法线混合）────
     // 公式真源 = `shading.rs`（horn_gradient / lighting_intensity /
     // scale_weights / 三档常量），本文件内常量与函数与其逐值镜像，两侧
-    // 注释互指——改任何一边必须同步另一边。三档合成落点 = [`tri_scale_relief`]。
+    // 注释互指——改任何一边必须同步另一边。三档合成落点 =
+    // [`tri_scale_shading`]（返回 I + 山脊高光判定的混合法线两项）。
     //
     // ## 符号锚点（与 `shading.rs::normal_world` 互指，两侧不许各改各的）
     //
@@ -252,7 +270,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // 梯度），之后才可与世界系 LIGHT_* 直接点积。旧 GPU 路线（≤T33）写
     // `−zy` 漏翻、受光等效西南——ADR-0077 起两管线统一为**西北受光**。
     // 两侧若同时翻或不翻，南北光照镜像，视觉验收立刻可察。
-    // 三档法线共用此约定，落点在 [`horn_lighting`]。
+    // 三档法线共用此约定，落点在 [`horn_normal`]。
     //
     // 梯度 = Horn 3×3（作者高度单位/格，见 [`horn_grad_at`]）；
     // `s = Z_EXAG / 本图高度跨度`（shading::slope_gain_of 同式，ADR-0092
@@ -262,13 +280,20 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // 跨度槽：桥接在材质创建时按 `shading::height_span_of` 填 `shape.w`；
     // max(·, 1.0) 兜平图除零（缺省恒等值即固定域跨度，非法值一并兜住）。
     let s = p.shape.z / max(p.shape.w, 1.0);
-    // WV_STRIP bit4 置 1 = relief 恒 1.0（平光）——只对 Themed 分支生效
-    // （BiomeRaw 的晕渲是数据视图契约，探针不得越支）。
-    let relief = select(
-        tri_scale_relief(pos, s, px_per_cell),
-        1.0,
+    // WV_STRIP bit4 置 1 = relief 恒 1.0（平光）+ 山脊高光关闭——只对
+    // Themed 分支生效（BiomeRaw 的晕渲是数据视图契约，探针不得越支）。
+    // ADR-0101：`tri_scale_shading` 返回 `vec4(I, dot(n, L₁), n.z, 0)`——
+    // 后两项供山脊高光判定（强受光 ∧ 陡坡），剥离态给 (1, 0, 1) 恒等。
+    let shade_v = select(
+        tri_scale_shading(pos, s, px_per_cell),
+        vec4<f32>(1.0, 0.0, 1.0, 0.0),
         strip_themed && (strip & 16u) != 0u,
     );
+    let relief = shade_v.x;
+    let ridge_active = strip_themed
+        && (strip & 16u) == 0u
+        && shade_v.y > RIDGE_DOT_THRESH
+        && degrees(acos(clamp(shade_v.z, -1.0, 1.0))) > RIDGE_SLOPE_DEG;
     //
     // ## T33「远观关灯」退役 + T6 单尺度的替代（ADR-0077 D3，有意推翻）
     //
@@ -395,9 +420,14 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         if (is_land) {
             // WV_STRIP bit0 置 1 = 剥掉色板，退回冻结群系表近似色
             // （biome_raw_approx）——此时下方 pad0.z 混合两端同色，恒等退化。
-            // 水面不走本支路（themed_land(false,·) 只返主题水色，不受探针影响）。
-            var own_pal = themed_land(true, h);
-            var nb_pal = themed_land(true, h);
+            // 水面不走本支路（下方 water_c 固定色，不受探针影响）。
+            // ADR-0101：底色 = **绝对高程色带**（`elev_ramp_continuous`，
+            // 8 阶段内连续渐变，与 CellMap 数据视图同一条色带同源 uniform），
+            // 取代旧 `themed_land` 的归一化三阶主题色——主题整合推迟 2.0，
+            // 详见 ADR-0101「theme 解耦」。群系色仍按 `p.pad0.z`（0.5）与
+            // 色带混合：高程主导、群系为修饰。
+            var own_pal = elev_ramp_continuous(h);
+            var nb_pal = elev_ramp_continuous(h);
             if ((strip & 1u) != 0u) {
                 own_pal = biome_raw_approx(biome_id);
                 nb_pal = biome_raw_approx(nb_id);
@@ -406,12 +436,27 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             let nb_col = mix(nb_pal, biome_raw_approx(nb_id), p.pad0.z);
             base = mix(nb_col, own, biome_mix);
         } else {
-            base = themed_land(false, h);
+            // 固定海水基色（ADR-0101；sRGB 常量过 srgb_to_linear 进线性域）。
+            base = srgb_to_linear(WATER_SRGB);
         }
     }
     // 明暗只作用于陆面。水面用深度量程表达 —— 海面跟着地形一起明暗是
     // 现行烘焙路径最刺眼的 bug 之一。
-    let land_col = base * relief;
+    // ADR-0101：合成从 RGB 相乘改为 **LCH(ab) 明度调制**——只缩 L、色相
+    // 严格不动、阴影区色度小幅回补（`shade=1` 恒等，Flat/CellFlat 因
+    // relief=1 自然不受影响）。relief / base 均为线性域，入参契约一致。
+    var land_col = lch_hillshade(base, relief, SHADE_CHROMA_BOOST);
+    // 山脊高光（ADR-0101）：强受光 ∧ 陡坡 → 沿山脊亮一条边。灰色向量
+    // 加法在 LCH 之后、水色混合之前——粗 1km 格网上这是比 AO 便宜两个
+    // 数量级的「山脉可读信号」。判定输入 = `tri_scale_shading` 的混合
+    // 法线（dot₁ / 坡角），剥态（strip bit4 / 非 Themed）恒 false。
+    if (ridge_active) {
+        // 2026-11-05 实机验收修订：定值 boost 在近纸白的色带高阶上直接
+        // 饱和成白斑——按 `1 − 目标明度` 自削弱，上限 RIDGE_BOOST、高光
+        // 坡面按比例取小，白斑退回细线。
+        let ridge_lum = dot(land_col, vec3<f32>(0.2126, 0.7152, 0.0722));
+        land_col = land_col + vec3<f32>(RIDGE_BOOST * (1.0 - ridge_lum));
+    }
 
     // ── 海岸三段色带（SPEC §3.8.4：滩 0–1 / 浅 1–3 / 深 3–9 格）──────────
     // 用「入水深度」`wd = max(-sd, 0)` 驱动，全程连续量。
@@ -420,9 +465,14 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let t_shallow = smoothstep(p.shore_edges.x, p.shore_edges.y, wd);
     let t_deep = smoothstep(p.shore_edges.y, p.shore_edges.z, wd);
 
-    let shallow_c = mix(p.theme[0].rgb, p.theme[1].rgb, 0.55);
-    let deep_c = p.theme[0].rgb * 0.82;
-    var water_col = mix(mix(p.theme[0].rgb, shallow_c, t_shallow), deep_c, t_deep);
+    // ADR-0101：水色三件套从 `p.theme` 改固定常量派生——基色
+    // [`WATER_SRGB`]（sRGB 常量，此处过 [`srgb_to_linear`] 进线性域）、
+    // 浅滩向色带最低阶（深草绿）混入乳青调、深海 ×0.82（沿用旧派生比）。
+    // `theme` 槽位仍由桥接装填（政治页素底分支还读它），地形分支不再消费。
+    let water_c = srgb_to_linear(WATER_SRGB);
+    let shallow_c = mix(water_c, p.elev_ramp[0u].rgb, 0.25);
+    let deep_c = water_c * 0.82;
+    var water_col = mix(mix(water_c, shallow_c, t_shallow), deep_c, t_deep);
     // 色带屏幕封顶（追记一）：色带是**远观**制图暗示，不是线。近观把
     // 三段偏差整体收敛回平色水，海岸呈现退化为 AA 边界 + 岸线墨线
     // （两者已是屏幕口径）——与 Google/百度近观水面一致。
@@ -435,15 +485,18 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         p.shape.y >= 0.5,
     );
     // 素底分支（ADR-0074 T5）：海面**完全平色**——不叠深浅色带。
-    // 政治页要的是「纸上」观感，深度色带属于地形语汇。
+    // 政治页要的是「纸上」观感，深度色带属于地形语汇。政治页是主题
+    // 语义页（ADR-0079），仍读 `theme[0]`（ADR-0101 只解耦地形渲染）。
     if (p.shape.y > 1.5) {
         water_col = p.theme[0].rgb;
     } else {
-        water_col = mix(p.theme[0].rgb, water_col, band_gate);
+        water_col = mix(water_c, water_col, band_gate);
     }
     // 近岸白滩（t_shore 最高处向纸色偏一点，给水线一个视觉落点）
     // ——白滩缘同属色带装饰，随门控一起收。
-    water_col = mix(water_col, p.paper.rgb, 0.18 * t_shore * (1.0 - t_shallow) * band_gate);
+    // 2026-11-05 实机验收：0.18 在远观三层（滩+浅带+白滩）叠成「磨边
+    // 光环」，减到 0.10。
+    water_col = mix(water_col, p.paper.rgb, 0.10 * t_shore * (1.0 - t_shallow) * band_gate);
 
     // 亚格混合：一格宽的软过渡替代逐格硬切。
     var rgb = mix(water_col, land_col, land_t);
@@ -865,25 +918,34 @@ fn height_blur_at(pos: vec2<f32>, r: f32) -> f32 {
     return box_avg_height(pos, r);
 }
 
-// ── 三尺度晕渲合成（Task 7 · ADR-0077 D3）────────────────────────────────
+// ── 三尺度晕渲合成（Task 7 · ADR-0077 D3 建制；ADR-0101 改为法线混合）───
 //
-// `I_final = w_macro·I_macro + w_medium·I_medium + w_detail·I_detail`：
-// 三档各以自己的低通半径取 Horn 梯度 → 法线 → 双光 dot → `p.relief` 系数
-// 合成单档 I，再按随缩放变化的权重加权（权重和恒 1，混合后免钳制）。
+// 三档各以自己的低通半径取 Horn 梯度 → 各自求**法线**，按随缩放变化的
+// 权重混合成单一法线后**统一打光**（ADR-0101 推翻 ADR-0077 D3 的
+// 「各档打光再加权明暗」：法线混合避免多档明暗互相冲淡，且混合法线
+// 正是山脊高光的判定输入）。权重和恒 1，混合后免钳制。
 // 公式与常量真源 = `shading.rs`，本节函数与其**逐式镜像**（注释互指，
 // 改任何一边必须同步另一边）。
 
-/// 单档明暗 = `shading.rs::lighting_intensity` 同式（注释互指）。
+/// 单点法线（Horn 梯度 → 世界系法线）。
 ///
-/// 法线构造的符号锚点与 `shading.rs::normal_world` 逐字同形（fragment
+/// 符号锚点与 `shading.rs::normal_world` 逐字同形（fragment
 /// 明暗段注释）：`−s·zx / +s·zy`——**`+` 号是 y 翻转锚点，两侧不许各改
-/// 各的**。三光系数**真源 = `FieldParams.relief`**（x/y/z = AMBIENT /
+/// 各的**。旧 GPU 路线（≤T33）写 `−zy` 漏翻、受光等效西南——ADR-0077 起
+/// 两管线统一为**西北受光**。
+fn horn_normal(grad: vec2<f32>, s: f32) -> vec3<f32> {
+    return normalize(vec3<f32>(-grad.x * s, grad.y * s, 1.0));
+}
+
+/// 明暗 = `shading.rs::lighting_intensity` 同式（注释互指）。
+///
+/// 三光系数**真源 = `FieldParams.relief`**（x/y/z = AMBIENT /
 /// DIFFUSE_MAIN / DIFFUSE_AUX，桥接写入；demo 的 H 键晕渲开关即改写本槽
 /// ——WGSL 若写回字面量，本槽成死数据、开关静默失效）。LIGHT_MAIN /
-/// LIGHT_AUX 是真 45° 单位向量（经 uniform 槽），直接 dot 无需 normalize；
-/// 三系数和 = 1 时 I ∈ [0.4, 1.0] 界内免费。
-fn horn_lighting(grad: vec2<f32>, s: f32) -> f32 {
-    let n = normalize(vec3<f32>(-grad.x * s, grad.y * s, 1.0));
+/// LIGHT_AUX 是真 38°/50° 单位向量（经 uniform 槽，ADR-0101），直接 dot
+/// 无需 normalize；三系数和 = 1 时 I 界内免费（真实法线下
+/// I ∈ [0.33, ≈0.935]，见 shading.rs 文档）。
+fn lighting_from_normal(n: vec3<f32>) -> f32 {
     return p.relief.x
         + p.relief.y * max(0.0, dot(n, p.light_dir.xyz))
         + p.relief.z * max(0.0, dot(n, p.light_aux.xyz));
@@ -907,8 +969,8 @@ fn detail_weight_fade(px_per_cell: f32) -> f32 {
 /// 三尺度权重 = `shading.rs::scale_weights` 的**逐式镜像**（注释互指，
 /// 改任何一边必须同步另一边）。返回 `xyz = (w_macro, w_medium, w_detail)`，
 /// **和恒为 1**：detail 份额 = `W_DETAIL` × [`detail_weight_fade`]，衰减量
-/// 按宏观 : 中观（45 : 40）既有比例回流两档——衰减是「把噪声预算换给
-/// 宏观结构」，不是整体减光（ADR-0077 D3 取代 T33 关灯的理由）。
+/// 按宏观 : 中观（35 : 45，ADR-0101）既有比例回流两档——衰减是「把噪声
+/// 预算换给宏观结构」，不是整体减光（ADR-0077 D3 取代 T33 关灯的理由）。
 fn scale_weights(px_per_cell: f32) -> vec3<f32> {
     let detail = W_DETAIL * detail_weight_fade(px_per_cell);
     let back = W_DETAIL - detail; // 衰减量，按既有比例回流
@@ -918,22 +980,23 @@ fn scale_weights(px_per_cell: f32) -> vec3<f32> {
     return vec3<f32>(macro_w, medium_w, detail);
 }
 
-/// 三尺度晕渲合成（Task 7 · ADR-0077 D3）：
-/// `I_final = w_macro·I_macro + w_medium·I_medium + w_detail·I_detail`。
+/// 三尺度晕渲合成（ADR-0101 修订 ADR-0077 D3）：**三法线加权混合 → 统一
+/// 打光**。返回 `vec4(I, dot(n_mix, L₁), n_mix.z, 0)`——后两项是山脊高光
+/// 的判定输入（强受光 ∧ 陡坡），fragment 侧 [`RIDGE_DOT_THRESH`] 家族
+/// 消费，此处不判（保持本函数纯求值）。
 ///
-/// 三档半径 1 / 3 / 12 格（常量镜像 shading.rs）各自 [`horn_grad_at`] →
-/// [`horn_lighting`]，再按 [`scale_weights`] 加权；权重随 `px_per_cell`
-/// 变化，远观 detail 趋零、宏观档全额顶上（替换 T6 的单尺度 relief）。
-/// tap 账（每像素）：detail 档 8 tap（`r ≤ 1` 走 [`height_at`] 直采）+
-/// 中观 / 宏观各 8 邻域 × 8 tap 盒平均 = 8×8，合计 **136 tap/像素**
-///（brief 估的 72 按 4 tap 盒平均计；实际 [`box_avg_height`] 是 8 tap。
-/// 帧时间 A/B 实测见 task-7 报告，tap 预算优化留 §8）。
-fn tri_scale_relief(pos: vec2<f32>, s: f32, px_per_cell: f32) -> f32 {
-    let i_macro = horn_lighting(horn_grad_at(pos, MACRO_RADIUS_CELLS), s);
-    let i_medium = horn_lighting(horn_grad_at(pos, MEDIUM_RADIUS_CELLS), s);
-    let i_detail = horn_lighting(horn_grad_at(pos, DETAIL_RADIUS_CELLS), s);
+/// 三档半径 1 / 3 / 8 格（常量镜像 shading.rs，ADR-0101：宏观 12→8）各自
+/// [`horn_grad_at`] → [`horn_normal`]，按 [`scale_weights`] 混合法线后再
+/// 归一化、一次打光；权重随 `px_per_cell` 变化，远观 detail 趋零、宏观档
+/// 全额顶上（替换 T6 的单尺度 relief）。tap 账不变（136 tap/像素）。
+fn tri_scale_shading(pos: vec2<f32>, s: f32, px_per_cell: f32) -> vec4<f32> {
+    let n_macro = horn_normal(horn_grad_at(pos, MACRO_RADIUS_CELLS), s);
+    let n_medium = horn_normal(horn_grad_at(pos, MEDIUM_RADIUS_CELLS), s);
+    let n_detail = horn_normal(horn_grad_at(pos, DETAIL_RADIUS_CELLS), s);
     let w = scale_weights(px_per_cell);
-    return w.x * i_macro + w.y * i_medium + w.z * i_detail;
+    let n_mix = normalize(w.x * n_macro + w.y * n_medium + w.z * n_detail);
+    let i = lighting_from_normal(n_mix);
+    return vec4<f32>(i, dot(n_mix, p.light_dir.xyz), n_mix.z, 0.0);
 }
 
 /// 同 [`box_avg_height`]，作用于海岸距离场。
@@ -966,21 +1029,12 @@ fn sample_coast_raw(pos: vec2<f32>) -> f32 {
 
 // biome 边界检测（T27 的 4 邻比较）已随 ADR-0072 退役：群系边界改由
 // biome 距离场（biome_tex/biome_ids）亚格混合承担，逐格硬切判定不再需要。
-
-/// 主题分支陆面底色（Topographic 四阶）。
-fn themed_land(is_land: bool, h: f32) -> vec3<f32> {
-    if (!is_land) {
-        return p.theme[0].rgb;
-    }
-    // 用**窄平滑**代替硬阈值：硬切在远观（1 px/格以下）会在两个色阶之间
-    // 产生高频锯齿，读起来是彩色噪点且随缩放闪烁（T33 要避免的正是这个）。
-    // 过渡带 ±0.02 归一化高度 ≈ 小几百米，视觉上仍是「三阶色阶」。
-    const TIER_SOFT: f32 = 0.02;
-    let hi_t = smoothstep(CUT_HIGH - TIER_SOFT, CUT_HIGH + TIER_SOFT, h);
-    let lo_t = smoothstep(CUT_LOW - TIER_SOFT, CUT_LOW + TIER_SOFT, h);
-    let low_mid = mix(p.theme[1].rgb, p.theme[2].rgb, lo_t);
-    return mix(low_mid, p.theme[3].rgb, hi_t);
-}
+//
+// `themed_land`（Topographic 三阶主题色）已随 ADR-0101 退役（2026-11-05）：
+// Themed 陆面底色改走绝对高程色带 `elev_ramp_continuous`（上方 fragment
+// 明暗段），水面改固定常量 `WATER_SRGB`——地形渲染与 ThemePack 解耦，
+// 主题整合推迟 2.0。`p.theme` 槽位保留：政治页素底分支（shape.y > 1.5）
+// 仍读 theme[0]/theme[1]。`CUT_LOW` / `CUT_HIGH` 两常量随之删除。
 
 /// sRGB 分量 → 线性。手写的色板常量都是**人眼/取色器口径的 sRGB**
 /// （如 `0.32, 0.55, 0.32` 对应 `#52 8C 52`），而片元输出住线性空间，
@@ -989,6 +1043,73 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
     let lo = c / 12.92;
     let hi = pow((c + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4));
     return select(hi, lo, c <= vec3<f32>(0.04045));
+}
+
+// ── LCH(ab) 明暗调制（ADR-0101）─────────────────────────────────────────
+// CPU 真源 = `shading.rs::lch_shade`，本节函数与其**逐式镜像**（注释互指，
+// 改任何一边必须同步另一边）。白点 D65；输入输出均为线性 sRGB；无 uniform
+// / 无采样，纯函数。
+
+/// CIE Lab 分段函数的反函数（`f⁻¹`）：`t > 6/29` 立方，否则仿射。
+/// **WGSL 不允许函数内声明函数**——独立成模块级（外部评审版代码把
+/// `lab_finv` 嵌在 `lch_hillshade` 里，编译不过，已修正）。
+fn lab_finv(t: f32) -> f32 {
+    if (t > 6.0 / 29.0) {
+        return t * t * t;
+    }
+    return (t - 16.0 / 116.0) / 7.787;
+}
+
+/// LCH(ab) 明暗调制（ADR-0101）：只缩 L、色相 H 严格不动、阴影区色度
+/// 小幅回补（[`SHADE_CHROMA_BOOST`]）。替代旧 `base * relief` 的 RGB 相乘
+/// （乘法把暗部饱和度打掉，颜色发灰发脏）。
+///
+/// ## ⚠️ 矩阵列主序（外部评审版的静默错位，已修正）
+///
+/// WGSL `mat3x3` 构造器按**列**填充九个标量；评审版按**行**书写标准
+/// 变换矩阵 → 实际算的是**转置**（白色映射不到 L=100，色相整体漂——恰是
+/// 本函数要防的事）。下方矩阵已重排为列主序：`col0 = (M00, M10, M20)`。
+///
+/// 与 `shading.rs::lch_shade` 逐式镜像（注释互指）：中性色（C < 1e-4）
+/// 跳过色度补偿；`shade=1` 恒等；出界钳回 [0,1]。
+fn lch_hillshade(rgb: vec3<f32>, shade: f32, chroma_boost_max: f32) -> vec3<f32> {
+    // linear sRGB → XYZ（D65）。列主序：col_i 乘 rgb[i]。
+    let m_rgb2xyz = mat3x3<f32>(
+        0.4124564, 0.2126729, 0.0193339,
+        0.3575761, 0.7151522, 0.119192,
+        0.1804375, 0.0721750, 0.950304
+    );
+    let xyz = m_rgb2xyz * rgb;
+
+    let d65 = vec3<f32>(0.95047, 1.0, 1.08883);
+    let t = xyz / d65;
+    let fx = select(7.787 * t.x + 16.0 / 116.0, pow(t.x, 1.0 / 3.0), t.x > 0.008856);
+    let fy = select(7.787 * t.y + 16.0 / 116.0, pow(t.y, 1.0 / 3.0), t.y > 0.008856);
+    let fz = select(7.787 * t.z + 16.0 / 116.0, pow(t.z, 1.0 / 3.0), t.z > 0.008856);
+    let l = 116.0 * fy - 16.0;
+    let a = 500.0 * (fx - fy);
+    let b = 200.0 * (fy - fz);
+
+    // LCH：C = 模、H = atan2(b, a)。调制只动 L 与 C，H 原样带回。
+    let c = sqrt(a * a + b * b);
+    let hue = atan2(b, a);
+    let boost = select(0.0, (1.0 - shade) * chroma_boost_max, c > 1e-4);
+    let c_new = clamp(c + boost, 0.0, 130.0);
+    let l_new = clamp(l * shade, 0.0, 100.0);
+    let a_new = c_new * cos(hue);
+    let b_new = c_new * sin(hue);
+
+    // Lab → XYZ → linear sRGB（列主序，同上纪律）。
+    let fy2 = (l_new + 16.0) / 116.0;
+    let fx2 = a_new / 500.0 + fy2;
+    let fz2 = fy2 - b_new / 200.0;
+    let xyz_new = d65 * vec3<f32>(lab_finv(fx2), lab_finv(fy2), lab_finv(fz2));
+    let m_xyz2rgb = mat3x3<f32>(
+         3.2404542, -0.969266,  0.0556434,
+        -1.5371385,  1.8760108, -0.2040259,
+        -0.4985314,  0.041556,  1.057225
+    );
+    return clamp(m_xyz2rgb * xyz_new, vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
 // ── 分层设色（ADR-0055 → ADR-0077 段内连续渐变）─────────────────────────

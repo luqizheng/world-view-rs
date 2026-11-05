@@ -9,23 +9,36 @@
 //! 用户明示：晕渲的目标是**让山体可读**（山脊受光 / 背光分明、宽缓地形
 //! 有体量），不是渲染真实日照。因此三光系数（[`AMBIENT`] /
 //! [`DIFFUSE_MAIN`] / [`DIFFUSE_AUX`]）是**美术调参**，和恒为 1：
-//! `I = 0.4 + 0.48·max(0, N·L₁) + 0.12·max(0, N·L₂)`，入参 = 法线与
-//! 光向量的点积。[`LIGHT_MAIN`] / [`LIGHT_AUX`] 自 2026-10-28 起按
-//! spec/ADR-0077 D1 的字面存**真 45° 高度角单位向量**——`dot(n, LIGHT_*)`
-//! 即合法入参，无需归一化（此前沿用的 `(−1/√2, 1/√2, 1/√2)` 模长 √(3/2)、
-//! 实际高度角只有 atan(1/√2) ≈ 35.26°，与 spec 矛盾，已修正）。单位光向
-//! 下 `I ∈ [0.4, 1.0]`（三系数和为 1，`max(0,·)` 非负）**界内性免费获得，
-//! 明暗钳制（RELIEF_LO/HI）整体退役**，少一个调参自由度（ADR-0077 D1；
-//! 若拿非单位光向量直接点积则可越界，见 [`lighting_intensity`] 文档的
-//! 历史注记）。辅光 L₂ 治「山脉走向恰与主光平行时受光/背光面同时消失」
-//! 的盲区。
+//! `I = 0.33 + 0.52·max(0, N·L₁) + 0.15·max(0, N·L₂)`，入参 = 法线与
+//! 光向量的点积。[`LIGHT_MAIN`] / [`LIGHT_AUX`] 存**单位向量**（`dot(n,
+//! LIGHT_*)` 即合法入参，无需归一化）。单位光向下 `I ∈ [0.33, ≈0.935]`
+//! （三系数和为 1，`max(0,·)` 非负）**界内性免费获得**——环境光从
+//! 0.4 降下来是 ADR-0101 的核心目标之一：旧 0.4 保底把背光面抬平，山体
+//! 明暗比只有 2.5:1；新口径 ≈2.8:1，背光面沉下去且不过重（若拿非单位
+//! 光向量直接点积则可越界，见 [`lighting_intensity`] 文档的历史注记）。
+//! 辅光 L₂ 治「山脉走向恰与主光平行时受光/背光面同时消失」的盲区。
+//!
+//! ## 2026-11-05 修订（ADR-0101，推翻 ADR-0077 D1 的参数面）
+//!
+//! 外部制图评审（2026-11-05，结论已裁定采纳）推翻 ADR-0077 D1 的**数值**：
+//! ① 主光高度角 45° → **38°**、辅光 45° → **50°**（仰角越低坡面对比越锐，
+//! 45° 偏「无影」）；② 能量配比 0.4/0.48/0.12 → **0.33/0.52/0.15**（评审
+//! 方案 B：保底下调 = 阴影下沉；首轮 0.28/0.55/0.17 实机暗侧过重，微抬）。
+//! 机制不变：三系数和 = 1、单位光向量、免钳制。
+//! ③ 合成由 RGB 直接相乘改为 **LCH(ab) 明度调制**（[`lch_shade`]）——
+//! 只缩 L、色相严格不动、阴影区色度小幅回补，防「乘法变灰变脏」；
+//! ④ 新增**山脊高光**装饰层（[`RIDGE_DOT_THRESH`] 家族，仅 Themed 分支）。
+//! 依据与被否决备选（米制 Z、SSAO、AO）见 ADR-0101。
 //!
 //! ## 量纲纪律（2026-10-30 起：**归一化高度域**，修正 ADR-0077 D2 的米制口径）
 //!
 //! [`horn_gradient`] 返回**作者高度单位/格**（i16 差分）；[`slope_gain_of`]
-//! 用**本图高度实际跨度**把它归一化（`s = Z_EXAG / 跨度`）。语义 =「把本图
-//! 最高差按 [`Z_EXAG`] 格起伏打光」——同**相对**高差 → 同法线，与作者的
-//! 高度单位（米 / 抽象格值）、图的格距、有无比例尺全部无关。
+//! 用**本图陆地高度实际跨度**把它归一化（`s = Z_EXAG / 陆地跨度`，2026-11-05
+//! ADR-0101 起 [`height_span_of`] 只统计 `height > 0` 的格——海底深洼会把
+//! 分母灌大、稀释陆地浮雕，实测 jrpg-world 全域 span 5246 vs 陆地 3548，
+//! 改后浮雕 +1.48×）。语义 =「把本图**陆地**最高差按 [`Z_EXAG`] 格起伏
+//! 打光」——同**相对**高差 → 同法线，与作者的高度单位（米 / 抽象格值）、
+//! 图的格距、有无比例尺全部无关。
 //!
 //! **为什么废弃米制口径**（ADR-0092 §1 证据链）：米制 `s = Z_EXAG / 米每格`
 //! 与 GPU 场管线的**纹理归一化梯度**（h_norm ∈ [0,1]，固定域 −4000..6000）
@@ -33,18 +46,19 @@
 //! CPU raw 域又落在饱和端——同一旋钮在两管线双双失效；且作者高度本就
 //! 不必然是米（README §12-53 的老问题在晕渲侧的显影）。米制机器
 //! （`meters_per_cell_of` / `DEFAULT_METERS_PER_CELL`）随本修正退役。
+//! **ADR-0101 再次确认归一化域**（否决外部评审「Z_EXAG=2.5 米制」提案——
+//! 那是误读本常量：200 是「全图跨度按 200 格起伏」的归一化域系数，等效
+//! 米制夸张 ≈38×，填 2.5 会把山脉压成 6° 缓坡）。
 //!
 //! ## 三尺度概括
 //!
-//! `I_final = W_MACRO·I_macro + W_MEDIUM·I_medium + W_DETAIL·I_detail`
-//! （三权重和 = 1，混合后仍在 `[0.4, 1.0]`）。远观时细纹理成噪点，
-//! detail 权重随 px_per_cell 平滑衰减、衰减量按宏观：中观比例回流
-//! （[`scale_weights`]）——**取代** T33「远观浮雕整体关灯」（有意推翻，
-//! ADR-0077 D3）。
+//! 三尺度各求**法线**，按权重混合成单一法线后**统一打光**（2026-11-05
+//! ADR-0101 起；原 ADR-0077 D3 为「各档打光再加权明暗」——法线混合避免
+//! 多档明暗互相冲淡，且混合法线正是山脊高光的判定输入）。三权重和 = 1。
+//! 远观时细纹理成噪点，detail 权重随 px_per_cell 平滑衰减、衰减量按
+//! 宏观：中观比例回流（[`scale_weights`]）。
 //!
 //! [ADR-0077]: ../docs/adr/ADR-0077-cellmap-relief-shading.md
-
-use std::f32::consts::FRAC_1_SQRT_2;
 
 use wv_core::terrain::TerrainData;
 
@@ -53,11 +67,16 @@ use wv_core::terrain::TerrainData;
 // ---------------------------------------------------------------------------
 
 /// 环境光系数：背光面保底亮度。与两漫反射系数和恒为 1（见模块文档）。
-pub const AMBIENT: f32 = 0.4;
+///
+/// **0.33（ADR-0101）**：旧 0.4 把背光面抬得太高（明暗比 2.5:1，山体
+/// 「平」的直接原因之一）。首轮落参 0.28（明暗比 ≈3.3:1），实机验收
+/// 觉得中景山体暗侧过重（「脏棕」观感），微抬到 0.33——即评审方案 B
+/// 配比 0.33/0.52/0.15（和仍 = 1，免钳制纪律不变）。
+pub const AMBIENT: f32 = 0.33;
 /// 主光漫反射系数。
-pub const DIFFUSE_MAIN: f32 = 0.48;
-/// 辅光漫反射系数（弱辅助，约为主光的 1/4）。
-pub const DIFFUSE_AUX: f32 = 0.12;
+pub const DIFFUSE_MAIN: f32 = 0.52;
+/// 辅光漫反射系数。
+pub const DIFFUSE_AUX: f32 = 0.15;
 
 /// 垂直夸张系数（**归一化域，无量纲**）：`s·梯度 = Z_EXAG × 梯度/跨度`，
 /// 语义 =「把本图最高差按 [`Z_EXAG`] 格起伏打光」。**2026-10-30 实机落参
@@ -95,32 +114,61 @@ pub fn z_exag() -> f32 {
 /// 宏观档权重（远观山脉骨架）。
 /// 三尺度权重 [`W_MACRO`] + [`W_MEDIUM`] + [`W_DETAIL`] 和 = 1，
 /// 混合结果不需要再钳制——与光照系数同一「和=1 免钳制」纪律。
-pub const W_MACRO: f32 = 0.45;
+///
+/// **0.35（ADR-0101）**：旧 0.45 让最大尺度的盒平均主导整幅，山脊骨架
+/// 被平滑掉；评审建议把权重重心移到中观（山坡褶皱），宏观只负责骨架。
+pub const W_MACRO: f32 = 0.35;
 /// 中观档权重（支脉 / 山体）。
-pub const W_MEDIUM: f32 = 0.40;
+pub const W_MEDIUM: f32 = 0.45;
 /// 细节档权重（局部坡面），随缩放衰减（[`detail_weight_fade`]）。
-pub const W_DETAIL: f32 = 0.15;
+pub const W_DETAIL: f32 = 0.20;
 
 /// 中观盒平均足迹（格）：中观档 ≈ 以此为半径的盒式低通后的地形打光。
 /// GPU 侧映射到 mip 级偏移 / 跨步采样（mip 即盒式低通；高度为仿射编码
 /// ⇒ 编码域滤波 ≡ 米域滤波，ADR-0077 D3）。
 pub const MEDIUM_RADIUS_CELLS: f32 = 3.0;
 /// 宏观盒平均足迹（格）：宏观档的盒式低通半径。
-pub const MACRO_RADIUS_CELLS: f32 = 12.0;
+///
+/// **8（ADR-0101）**：旧 12 格 = 12 km 的低通把山脉链整体抹平（骨架反而
+/// 软）；8 格保住山链走向的同时仍滤掉单格噪声。
+pub const MACRO_RADIUS_CELLS: f32 = 8.0;
 
-/// 主光 L₁：方位 315°（西北）、**高度角 45°**（spec D1 字面；「左上受光」
-/// 与全部地物符号/阴影同向——方位沿旧 `field/material.rs::LIGHT_DIR` 的
-/// 既有惯例（T6 语义翻转日退役），高度角 D1 修正为真 45°）。**单位向量**：水平模 cos45° = 1/√2
-/// 均分到西北两轴（各 0.5），z = sin45° = 1/√2 表示「光从观察者方向偏上
-/// 打过来」——纯 2D hillshade 的 z=0 会让所有法线与光垂直、整幅图恒定
-/// 亮度。2026-10-28 前沿用的 `(−1/√2, 1/√2, 1/√2)` 模长 √(3/2)、实际
-/// 高度角仅 35.26°，与 spec 矛盾，随归一化契约取消一并修正——**消费侧
-/// （T4 CPU / T6 WGSL）直接 dot 即可，无需再 normalize**（多 normalize
-/// 也无害，单位向量不动）。
-pub const LIGHT_MAIN: [f32; 3] = [-0.5, 0.5, FRAC_1_SQRT_2];
-/// 辅光 L₂：方位 45°（东北）、高度角 45°。与主光**只差 x 符号**——
+/// 主光 L₁：方位 315°（西北）、**高度角 38°**（ADR-0101，2026-11-05 外部
+/// 制图评审落参；旧 ADR-0077 D1 值 45°——仰角越低坡面明暗对比越锐，
+/// 45° 接近「无影照明」。「左上受光」与全部地物符号/阴影同向）。**单位
+/// 向量**：水平模 cos38° ≈ 0.788011 均分到西北两轴（各 ≈0.557208），
+/// z = sin38° ≈ 0.615661——纯 2D hillshade 的 z=0 会让所有法线与光垂直、
+/// 整幅图恒定亮度。**消费侧（T4 CPU / T6 WGSL）直接 dot 即可，无需再
+/// normalize**（多 normalize 也无害，单位向量不动）。
+pub const LIGHT_MAIN: [f32; 3] = [-0.5572078, 0.5572078, 0.6156615];
+/// 辅光 L₂：方位 45°（东北）、**高度角 50°**（ADR-0101：辅光只补层次，
+/// 仰角抬高、避免与主光抢对比）。与主光**只差 x 符号与仰角**——
 /// 正交的受光盲区互补：任一走向的山脉，两面至少被一盏灯看见。
-pub const LIGHT_AUX: [f32; 3] = [0.5, 0.5, FRAC_1_SQRT_2];
+pub const LIGHT_AUX: [f32; 3] = [0.4545195, 0.4545195, 0.7660444];
+
+/// 山脊高光：主光点积门槛（ADR-0101）。混合法线与主光点积**超过**此值
+/// （强受光坡面）才参与判定——高光只沿「被照亮的陡坡」出一条边。
+pub const RIDGE_DOT_THRESH: f32 = 0.80;
+/// 山脊高光：坡度门槛（度，ADR-0101）。混合法线 z 分量换算的坡角超过
+/// 此值（陡坡）才参与判定——平缓台地不提亮。
+pub const RIDGE_SLOPE_DEG: f32 = 18.0;
+/// 山脊高光：命中后的**线性明度增量上限**（ADR-0101）。加在 LCH 调制结果
+/// 上（linear RGB 域），且按 `1 − 目标明度` 自削弱——首版 0.12 定值加在
+/// 近纸白的色带高阶上直接饱和成白斑（2026-11-05 实机验收退回）；现值
+/// 0.06：中调坡面 ≈+0.04，高光坡面自削弱，斑点退回细线。
+pub const RIDGE_BOOST: f32 = 0.06;
+
+/// LCH 阴影色度补偿上限（ADR-0101）：[`lch_shade`] 在最深处（shade→0）
+/// 给色度 C 追加的最大 Lab 色度量。0.12 ≈ 肉眼「阴影不发灰」的舒适带
+/// （0.10–0.15，评审建议区间取中）；中性色（C < 1e-4）不补偿——无 hue
+/// 可守，注入色相反而染脏纸面色。
+pub const SHADE_CHROMA_BOOST: f32 = 0.12;
+
+/// 固定海水基色（**sRGB 口径**，`#2A5D8F`；ADR-0101：地形渲染与 ThemePack
+/// 解耦后的固定常量，主题整合推迟 2.0）。浅滩 / 深海色带在 GPU 侧由此
+/// 派生（浅 = 向色带低阶色混、深 = ×0.82），不再读 `p.theme[0]`。
+/// **首版标定值，实机验收后可调**（改这里 = 改 Browse/Map 的海色）。
+pub const WATER_SRGB: [f32; 3] = [0.1647059, 0.3647059, 0.5607843];
 
 /// detail 权重衰减曲线起点（px/格）：低于此分辨率细纹理全是噪点，
 /// detail 权重归零。
@@ -132,7 +180,14 @@ pub const DETAIL_FADE_MAX_PX_PER_CELL: f32 = 3.0;
 // 纯函数（消费方：CPU 块烘焙 / GPU uniform / WGSL 三处只认这里）
 // ---------------------------------------------------------------------------
 
-/// 本图高度实际跨度（作者单位）：`max(h) − min(h)`，下限 1 防平图除零。
+/// 本图**陆地**高度实际跨度（作者单位）：`max(h) − min(h)` 仅统计
+/// `height > 0` 的格，下限 1 防平图/全海图除零。
+///
+/// **2026-11-05 ADR-0101 修正**：原口径是全域 max−min——海底深洼
+/// （demo 实测全域 span 5246 vs 陆地 3548）会把归一化分母灌大 ≈1.48×，
+/// 陆地浮雕被稀释成缓坡。晕渲管的是**陆面**（水面不进明暗），分母
+/// 自然也只管陆面。全海图（无 `h > 0` 格）回落下限 1：梯度本来就全零，
+/// 下限只保证 gain 有限、不产生 NaN。
 ///
 /// 归一化夸张的分母——**每次烘焙现场算一遍**（O(N) 一次线性扫），不做缓存：
 /// 笔刷改高度后跨度会变，缓存会让编辑前后的浮雕口径漂移。平图（跨度 0）
@@ -141,17 +196,25 @@ pub fn height_span_of(data: &TerrainData) -> f32 {
     let mut lo = i16::MAX;
     let mut hi = i16::MIN;
     for c in &data.cells {
+        if c.height <= 0 {
+            continue;
+        }
         lo = lo.min(c.height);
         hi = hi.max(c.height);
     }
-    (hi - lo).max(1) as f32
+    if hi < lo {
+        // 全海图（无 h > 0 格）：回落下限——i16 直减还会溢出（MIN−MAX），
+        // 必须在减法前拦截。
+        return 1.0;
+    }
+    ((hi as i32) - (lo as i32)).max(1) as f32
 }
 
-/// 梯度归一化增益：`s = z_exag() / 本图高度跨度`。
+/// 梯度归一化增益：`s = z_exag() / 本图陆地高度跨度`。
 ///
-/// 梯度是「作者高度单位/格」，s 把「每格高差 ÷ 全图跨度」缩成无纲相对坡度
+/// 梯度是「作者高度单位/格」，s 把「每格高差 ÷ 陆地跨度」缩成无纲相对坡度
 /// 再进法线公式；归一化后「同**相对**高差 → 同法线」跨图成立——作者的
-/// 高度单位、格距、有无比例尺都不再影响观感（量纲纪律见模块文档）。
+/// 高度单位、格距、有无比例尺都不影响观感（量纲纪律见模块文档）。
 pub fn slope_gain_of(height_span: f32) -> f32 {
     z_exag() / height_span
 }
@@ -169,29 +232,105 @@ pub const DEFAULT_HEIGHT_SPAN: f32 = 10000.0;
 ///
 /// ## 接口契约：入参 = `dot(n, LIGHT_*)`
 ///
-/// [`LIGHT_MAIN`] / [`LIGHT_AUX`] 自 2026-10-28 起是**单位向量**（spec D1：
-/// 方位 315°/45°、高度角 45°），`n_dot_l1 / n_dot_l2` 直接取
+/// [`LIGHT_MAIN`] / [`LIGHT_AUX`] 是**单位向量**（方位 315°/45°、高度角
+/// 38°/50°，ADR-0101），`n_dot_l1 / n_dot_l2` 直接取
 /// `dot(n, LIGHT_MAIN)` / `dot(n, LIGHT_AUX)` 即可，无需归一化
 ///（2026-10-28 前常量存模长 √(3/2) 方向、归一化是调用方义务——契约随
-/// 常量单位化取消；本函数始终按 ADR-0077 D1 锁死为纯公式，不做隐式
-/// 归一化）。
+/// 常量单位化取消；本函数始终锁死为纯公式，不做隐式归一化）。
 ///
-/// 对单位光向量点积入参，`I ∈ [0.4, 1.0]`（三系数和为 1，`max(0,·)` 非负）
-/// ——**界内性免费获得，调用方不许再钳制**。上界不紧：全定义域实际
-/// max = `0.4 + |0.48·L₁ + 0.12·L₂|`，其中 `L₁·L₂ = 0.5`，故
-/// `|0.48L₁ + 0.12L₂| = √(0.48² + 0.12² + 2·0.48·0.12·0.5) = √0.3024
-/// ≈ 0.5499`，即 max ≈ 0.9499（取得于 `n ∝ 0.48L₁ + 0.12L₂`）；下界 0.4
-/// 可达（n 与两灯点积同时 ≤ 0，如 n = (0, −1, 0)）。
+/// 对单位光向量点积入参，`I ∈ [0.33, ≈0.935]`（三系数和为 1，`max(0,·)`
+/// 非负）——**界内性免费获得，调用方不许再钳制**。上界不紧：全定义域
+/// 实际 max = `0.33 + |0.52·L₁ + 0.15·L₂|`，其中 `L₁·L₂ = 0.4716`（两灯
+/// 只差 x 符号与仰角，水平项相消），故 `|0.52L₁ + 0.15L₂| =
+/// √(0.52² + 0.15² + 2·0.52·0.15·0.4716) ≈ 0.6054`，即 max ≈ 0.9354
+///（取得于 `n ∝ 0.52L₁ + 0.15L₂`）；下界 0.33 可达（n 与两灯点积同时
+/// ≤ 0，如 n = (0, −1, 0)）。
 ///
 /// ## ⚠️ 历史注记：非单位光向量入参可越界
 ///
 /// 若调用方拿**非单位**光向量直接点积（2026-10-28 前的常量口径），
-/// `I` 可超 1（旧常量下全定义域上界 ≈ 1.0518，在 n ∝ (−0.36, 0.6, 0.6)
-/// 处取得）——越界即亮部溢出，事后钳制救不回层次。现常量已单位化，
+/// `I` 可超 1——越界即亮部溢出，事后钳制救不回层次。现常量已单位化，
 /// 此坑只在未来改光向时需要警惕：**改常量必须保持模长 1**（锚点测试
-/// `lighting_constants_are_unit_vectors_at_45_degree_elevation`）。
+/// `lighting_constants_are_unit_vectors_at_declared_elevation`）。
 pub fn lighting_intensity(n_dot_l1: f32, n_dot_l2: f32) -> f32 {
     AMBIENT + DIFFUSE_MAIN * n_dot_l1.max(0.0) + DIFFUSE_AUX * n_dot_l2.max(0.0)
+}
+
+/// LCH(ab) 明暗调制（ADR-0101）：**只缩 L（明度）、色相 H 严格不动、
+/// 阴影区色度 C 小幅回补**——替代旧的 RGB 直接相乘（乘法把暗部饱和度
+/// 打掉，颜色发灰发脏，山体越暗越「糊」）。
+///
+/// `linear RGB → XYZ → Lab → LCH → 缩放/回补 → Lab → XYZ → linear RGB`，
+/// 白点 D65，全内联纯函数（GPU 侧 `terrain_field.wgsl::lch_hillshade`
+/// 与本函数**逐式镜像**，注释互指——改任何一侧必须同步另一侧）。
+///
+/// ## 参数
+///
+/// - `rgb`：**线性 sRGB**（不是伽马编码值——本管线色板一律先
+///   `srgb_to_linear` 再进着色）。
+/// - `shade`：晕渲明暗因子（[`lighting_intensity`] 的输出，0.33–0.94）。
+/// - `chroma_boost_max`：阴影最深处追加的最大色度（[`SHADE_CHROMA_BOOST`]）；
+///   按阴影深度线性缩放（`shade=1` → 零补偿）。
+///
+/// ## 边界行为
+///
+/// - `shade = 1`：恒等（±1e-4 浮点回路误差，测试钉住）。
+/// - 中性色（C < 1e-4）**跳过色度补偿**：无 hue 可守，注入色相会把纸面
+///   灰染脏；atan2(0,0) 在部分后端未定义，一并规避。
+/// - 出界钳回 [0, 1]：高饱和深阴影在 Lab→RGB 反解时可出线性域，
+///   clamp 是最后防线（极边缘处色相有微小损失，可接受）。
+pub fn lch_shade(rgb: [f32; 3], shade: f32, chroma_boost_max: f32) -> [f32; 3] {
+    // linear sRGB → XYZ（D65）。行 × 列展开书写，避免 mat 语义歧义。
+    let x = 0.4124564 * rgb[0] + 0.3575761 * rgb[1] + 0.1804375 * rgb[2];
+    let y = 0.2126729 * rgb[0] + 0.7151522 * rgb[1] + 0.0721750 * rgb[2];
+    let z = 0.0193339 * rgb[0] + 0.119192 * rgb[1] + 0.950304 * rgb[2];
+
+    const D65: [f32; 3] = [0.95047, 1.0, 1.08883];
+    let f = |t: f32| {
+        if t > 0.008856 {
+            t.cbrt()
+        } else {
+            7.787 * t + 16.0 / 116.0
+        }
+    };
+    let fx = f(x / D65[0]);
+    let fy = f(y / D65[1]);
+    let fz = f(z / D65[2]);
+    let l = 116.0 * fy - 16.0;
+    let a = 500.0 * (fx - fy);
+    let b = 200.0 * (fy - fz);
+
+    // LCH：C = 模、H = atan2(b, a)。调制只动 L 与 C，H 原样带回。
+    let c = (a * a + b * b).sqrt();
+    let hue = b.atan2(a);
+    let boost = if c > 1e-4 {
+        (1.0 - shade) * chroma_boost_max
+    } else {
+        0.0
+    };
+    let c_new = (c + boost).clamp(0.0, 130.0);
+    let l_new = (l * shade).clamp(0.0, 100.0);
+    let a_new = c_new * hue.cos();
+    let b_new = c_new * hue.sin();
+
+    // Lab → XYZ → linear sRGB。
+    let fy2 = (l_new + 16.0) / 116.0;
+    let fx2 = a_new / 500.0 + fy2;
+    let fz2 = fy2 - b_new / 200.0;
+    let finv = |t: f32| {
+        if t > 6.0 / 29.0 {
+            t * t * t
+        } else {
+            (t - 16.0 / 116.0) / 7.787
+        }
+    };
+    let x2 = D65[0] * finv(fx2);
+    let y2 = D65[1] * finv(fy2);
+    let z2 = D65[2] * finv(fz2);
+    let r = 3.2404542 * x2 - 1.5371385 * y2 - 0.4985314 * z2;
+    let g = -0.969266 * x2 + 1.8760108 * y2 + 0.041556 * z2;
+    let bl = 0.0556434 * x2 - 0.2040259 * y2 + 1.057225 * z2;
+    [r.clamp(0.0, 1.0), g.clamp(0.0, 1.0), bl.clamp(0.0, 1.0)]
 }
 
 /// Horn 3×3 梯度：`[1,2,1]ᵀ·[1,2,1]/8` 加权隔格差分，返回 `(hx, hy)` **米/格**。
@@ -304,6 +443,7 @@ pub fn scale_weights(px_per_cell: f32) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::f32::consts::FRAC_1_SQRT_2;
     use wv_core::terrain::TerrainCellData;
 
     const EPS: f32 = 1e-6;
@@ -327,26 +467,30 @@ mod tests {
 
     #[test]
     fn lighting_intensity_matches_hand_values_and_stays_in_bounds() {
-        // 全受光（两盏灯正对）：0.4 + 0.48 + 0.12 = 1.0
+        // 全受光（两盏灯正对）：0.33 + 0.52 + 0.15 = 1.0
         let full = lighting_intensity(1.0, 1.0);
         assert!((full - 1.0).abs() < EPS, "got {}", full);
-        // 纯背光：只吃环境光 0.4
+        // 纯背光：只吃环境光 0.33（ADR-0101：阴影下沉，山脉背光面在这）
         let dark = lighting_intensity(0.0, 0.0);
-        assert!((dark - 0.4).abs() < EPS, "got {}", dark);
-        // 单灯半受光：0.4 + 0.48·0.5 = 0.64
+        assert!((dark - AMBIENT).abs() < EPS, "got {}", dark);
+        // 单灯半受光：0.33 + 0.52·0.5 = 0.59
         let half = lighting_intensity(0.5, 0.0);
-        assert!((half - 0.64).abs() < EPS, "got {}", half);
-        // 负点积截断：0.4 + 0 + 0.12·0.5 = 0.46（max(0,·) 的手算证据）
+        assert!((half - 0.59).abs() < EPS, "got {}", half);
+        // 负点积截断：0.33 + 0 + 0.15·0.5 = 0.405（max(0,·) 的手算证据）
         let clamped = lighting_intensity(-1.0, 0.5);
-        assert!((clamped - 0.46).abs() < EPS, "got {}", clamped);
-        // 平地（法线 z=1，两灯各得 1/√2）：0.4 + 0.6·(1/√2) = 0.82426407
-        let flat = lighting_intensity(FRAC_1_SQRT_2, FRAC_1_SQRT_2);
+        assert!((clamped - 0.405).abs() < EPS, "got {}", clamped);
+        // 平地（法线 z=1，两灯各得自身 z 分量）：0.33 + 0.52·0.6156615
+        //   + 0.15·0.7660444 = 0.7650512（手算锚点）
+        let flat = lighting_intensity(LIGHT_MAIN[2], LIGHT_AUX[2]);
         assert!(
-            (flat - (0.4 + 0.6 * FRAC_1_SQRT_2)).abs() < EPS,
-            "got {}",
-            flat
+            (flat - 0.7650512).abs() < 1e-4,
+            "got {flat}（期望 0.33 + 0.52·{} + 0.15·{}）",
+            LIGHT_MAIN[2],
+            LIGHT_AUX[2]
         );
-        // 界内性对抽样点成立（公式性质：[0.4, 1.0]，见函数文档）
+        // 界内性对抽样点成立。任意 [0,1] 点积入参下 I ∈ [0.33, 1.0]
+        //（系数和 = 1）；(1,1) 这种「双灯正对」在真实法线下几何不可达，
+        // 真实可达上限单独验（下一条断言）。
         for &(n1, n2) in &[
             (0.0, 0.0),
             (1.0, 1.0),
@@ -354,16 +498,31 @@ mod tests {
             (-1.0, 1.0),
             (-1.0, -1.0),
             (0.5, 0.5),
-            (FRAC_1_SQRT_2, FRAC_1_SQRT_2),
+            (LIGHT_MAIN[2], LIGHT_AUX[2]),
             (1e-6, 1e-6),
         ] {
             let i = lighting_intensity(n1, n2);
             assert!(
-                (0.4 - EPS..=1.0 + EPS).contains(&i),
+                (AMBIENT - EPS..=1.0 + EPS).contains(&i),
                 "N·L=({n1},{n2}) -> I={} 越界",
                 i
             );
         }
+        // 几何可达上限：n ∝ 0.52·L₁ + 0.15·L₂（函数文档的手算），
+        // I_max = 0.33 + |0.52L₁ + 0.15L₂| ≈ 0.9354 —— ADR-0101 明暗比
+        // ≈2.8:1 的来源。
+        let vx = 0.52 * LIGHT_MAIN[0] + 0.15 * LIGHT_AUX[0];
+        let vy = 0.52 * LIGHT_MAIN[1] + 0.15 * LIGHT_AUX[1];
+        let vz = 0.52 * LIGHT_MAIN[2] + 0.15 * LIGHT_AUX[2];
+        let len = (vx * vx + vy * vy + vz * vz).sqrt();
+        let (vx, vy, vz) = (vx / len, vy / len, vz / len);
+        let dot1 = vx * LIGHT_MAIN[0] + vy * LIGHT_MAIN[1] + vz * LIGHT_MAIN[2];
+        let dot2 = vx * LIGHT_AUX[0] + vy * LIGHT_AUX[1] + vz * LIGHT_AUX[2];
+        let i_max = lighting_intensity(dot1, dot2);
+        assert!(
+            (i_max - 0.9354).abs() < 1e-3,
+            "几何可达上限应 ≈0.9354，得 {i_max}"
+        );
     }
 
     #[test]
@@ -389,25 +548,33 @@ mod tests {
     }
 
     #[test]
-    fn lighting_constants_are_unit_vectors_at_45_degree_elevation() {
-        // spec D1：方位 315°/45°、高度角 45° ⇒ 单位向量 (±0.5, 0.5, 1/√2)，
-        // 模长 1（0.25 + 0.25 + 0.5 = 1）——`lighting_intensity` 的「直接
-        // dot」契约以此为前提，模长漂移即界内性失效（见该函数历史注记）。
-        for l in [LIGHT_MAIN, LIGHT_AUX] {
+    fn lighting_constants_are_unit_vectors_at_declared_elevation() {
+        // ADR-0101：方位 315°/45°、高度角 38°/50° ⇒ 单位向量
+        // (±cos(el)/√2, cos(el)/√2, sin(el))，模长 1——`lighting_intensity`
+        // 的「直接 dot」契约以此为前提，模长漂移即界内性失效（见该函数
+        // 历史注记）。锚点：cos38°/√2 = 0.5572078、sin38° = 0.6156615；
+        // cos50°/√2 = 0.4545195、sin50° = 0.7660444（手算）。
+        for (l, y_ref, z_ref) in [
+            (LIGHT_MAIN, 0.5572078, 0.6156615),
+            (LIGHT_AUX, 0.4545195, 0.7660444),
+        ] {
             let len2 = l[0] * l[0] + l[1] * l[1] + l[2] * l[2];
-            assert!((len2 - 1.0).abs() < EPS, "模长² = {len2} 应为 1");
+            assert!((len2 - 1.0).abs() < 1e-6, "模长² = {len2} 应为 1");
             assert!(
-                (l[2] - FRAC_1_SQRT_2).abs() < EPS,
-                "z = {:?} 应为 sin45°",
-                l[2]
+                (l[1] - y_ref).abs() < 1e-6,
+                "y = {:?} 应为 cos(el)/√2",
+                l[1]
             );
-            assert!((l[1] - 0.5).abs() < EPS, "y = {:?} 应为 0.5", l[1]);
+            assert!((l[2] - z_ref).abs() < 1e-6, "z = {:?} 应为 sin(el)", l[2]);
         }
-        assert!((LIGHT_MAIN[0] + 0.5).abs() < EPS, "主光从西北（x = −0.5）");
-        assert!((LIGHT_AUX[0] - 0.5).abs() < EPS, "辅光从东北（x = +0.5）");
-        // 两灯只差 x 符号（盲区互补的结构前提）。
-        assert_eq!(LIGHT_MAIN[1], LIGHT_AUX[1]);
-        assert_eq!(LIGHT_MAIN[2], LIGHT_AUX[2]);
+        assert!(
+            (LIGHT_MAIN[0] + LIGHT_MAIN[1]).abs() < EPS,
+            "主光从西北（x = −y）"
+        );
+        assert!(
+            (LIGHT_AUX[0] - LIGHT_AUX[1]).abs() < EPS,
+            "辅光从东北（x = +y）"
+        );
     }
 
     #[test]
@@ -419,13 +586,13 @@ mod tests {
         assert!((n[1] - FRAC_1_SQRT_2).abs() < EPS, "got {}", n[1]);
         let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
         assert!((len - 1.0).abs() < EPS, "got {}", len);
-        // 单位光向量的原始点积即合法入参：
-        // 0·(−0.5) + (1/√2)·0.5 + (1/√2)·(1/√2) = 0.5/√2 + 0.5 = 0.8535533；
-        // 北向坡正对两灯的公共 y/z 锥，n·LIGHT_AUX 同值。
+        // 单位光向量的原始点积即合法入参。45° 坡两分量各 1/√2：
+        // dot₁ = (1/√2)·(0.5572078 + 0.6156615) ≈ 0.8293438
+        // dot₂ = (1/√2)·(0.4545195 + 0.7660444) ≈ 0.8630689
         let dot = n[0] * LIGHT_MAIN[0] + n[1] * LIGHT_MAIN[1] + n[2] * LIGHT_MAIN[2];
         assert!(dot > 0.0, "got {}", dot);
         assert!(
-            (dot - (0.5 + FRAC_1_SQRT_2 / 2.0)).abs() < EPS,
+            (dot - FRAC_1_SQRT_2 * (LIGHT_MAIN[1] + LIGHT_MAIN[2])).abs() < EPS,
             "got {}",
             dot
         );
@@ -433,11 +600,8 @@ mod tests {
             dot,
             n[0] * LIGHT_AUX[0] + n[1] * LIGHT_AUX[1] + n[2] * LIGHT_AUX[2],
         );
-        assert!(
-            (i - (0.4 + 0.6 * (0.5 + FRAC_1_SQRT_2 / 2.0))).abs() < EPS,
-            "got {}",
-            i
-        );
+        // 手算绝对锚点：0.33 + 0.52·0.8293438 + 0.15·0.8630689 ≈ 0.890_716。
+        assert!((i - 0.890_716).abs() < 1e-4, "got {i}");
     }
 
     #[test]
@@ -466,11 +630,12 @@ mod tests {
     }
 
     #[test]
-    fn height_span_of_covers_data_range_with_floor() {
-        // 跨度 = max−min（作者单位）；全平图下限 1 防除零。
+    fn height_span_of_covers_land_range_with_floor() {
+        // ADR-0101：跨度 = 陆地（h > 0）max−min（作者单位）；
+        // [100, -50, 250] 的海底 −50 **不参与**分母 → 250 − 100 = 150。
         let data = grid3(3, 1, &[100, -50, 250]);
         assert!(
-            (height_span_of(&data) - 300.0).abs() < EPS,
+            (height_span_of(&data) - 150.0).abs() < EPS,
             "got {}",
             height_span_of(&data)
         );
@@ -479,6 +644,13 @@ mod tests {
             (height_span_of(&flat) - 1.0).abs() < EPS,
             "got {}",
             height_span_of(&flat)
+        );
+        // 全海图：无 h > 0 格 → 回落下限 1（gain 有限、梯度全零，无害）。
+        let sea = grid3(3, 1, &[-5, -9, -2]);
+        assert!(
+            (height_span_of(&sea) - 1.0).abs() < EPS,
+            "got {}",
+            height_span_of(&sea)
         );
     }
 
@@ -499,7 +671,7 @@ mod tests {
             n[0] * LIGHT_AUX[0] + n[1] * LIGHT_AUX[1] + n[2] * LIGHT_AUX[2],
         );
         assert!(
-            (0.4 - 1e-4..=1.0 + 1e-4).contains(&i),
+            (AMBIENT - 1e-4..=0.928 + 1e-4).contains(&i),
             "断崖明度越界: got {}",
             i
         );
@@ -529,7 +701,7 @@ mod tests {
 
     #[test]
     fn radius_and_weight_constants_are_pinned() {
-        // 三尺度常量锚点（ADR-0077 D3/D6；T7 审查 minor 的 Rust 侧兜底）：
+        // 三尺度常量锚点（ADR-0077 D3/D6 建制；ADR-0101 改值 2026-11-05）：
         // GPU 侧 `terrain_field.wgsl` 以**字面量**镜像三档盒半径与三权重
         //（Rust 真源 → WGSL 镜像是人工同步，无编译期检查），本测试钉死
         // 真源字面值——任何人改常量都会先在这里撞红，从而有意识地同步
@@ -540,7 +712,7 @@ mod tests {
             MEDIUM_RADIUS_CELLS
         );
         assert!(
-            (MACRO_RADIUS_CELLS - 12.0).abs() < EPS,
+            (MACRO_RADIUS_CELLS - 8.0).abs() < EPS,
             "got {}",
             MACRO_RADIUS_CELLS
         );
@@ -558,25 +730,50 @@ mod tests {
             DETAIL_FADE_MAX_PX_PER_CELL
         );
         // 三尺度权重字面值（和 = 1 由权重混合测试另行保证）。
-        assert!((W_MACRO - 0.45).abs() < EPS, "got {}", W_MACRO);
-        assert!((W_MEDIUM - 0.40).abs() < EPS, "got {}", W_MEDIUM);
-        assert!((W_DETAIL - 0.15).abs() < EPS, "got {}", W_DETAIL);
+        assert!((W_MACRO - 0.35).abs() < EPS, "got {}", W_MACRO);
+        assert!((W_MEDIUM - 0.45).abs() < EPS, "got {}", W_MEDIUM);
+        assert!((W_DETAIL - 0.20).abs() < EPS, "got {}", W_DETAIL);
+        // ADR-0101 新家族：山脊高光 / LCH 色度补偿 / 固定水色（WGSL 镜像
+        // 同一人工同步纪律）。
+        assert!(
+            (RIDGE_DOT_THRESH - 0.80).abs() < EPS,
+            "got {}",
+            RIDGE_DOT_THRESH
+        );
+        assert!(
+            (RIDGE_SLOPE_DEG - 18.0).abs() < EPS,
+            "got {}",
+            RIDGE_SLOPE_DEG
+        );
+        assert!((RIDGE_BOOST - 0.06).abs() < EPS, "got {}", RIDGE_BOOST);
+        assert!(
+            (SHADE_CHROMA_BOOST - 0.12).abs() < EPS,
+            "got {}",
+            SHADE_CHROMA_BOOST
+        );
+        assert!(
+            (WATER_SRGB[0] - 0.1647059).abs() < 1e-6
+                && (WATER_SRGB[1] - 0.3647059).abs() < 1e-6
+                && (WATER_SRGB[2] - 0.5607843).abs() < 1e-6,
+            "WATER_SRGB = {:?} 应为 #2A5D8F",
+            WATER_SRGB
+        );
     }
 
     #[test]
     fn scale_weights_sum_to_one_and_detail_fades_monotonically() {
         // 手算 smoothstep(1, 3, ·)：t = (ppc−1)/2，s = t²(3−2t)。
-        // ppc=2.0 → t=0.5 → fade=0.5 → detail = 0.15·0.5 = 0.075，
-        // 回流 0.075 按 45:40 分：macro = 0.45+0.075·(45/85) = 0.4897059，
-        // medium = 0.40+0.075·(40/85) = 0.4352941。
+        // ppc=2.0 → t=0.5 → fade=0.5 → detail = 0.20·0.5 = 0.10，
+        // 回流 0.10 按 35:45 分：macro = 0.35+0.10·(35/80) = 0.39375，
+        // medium = 0.45+0.10·(45/80) = 0.50625（ADR-0101 权重）。
         let mid = scale_weights(2.0);
-        assert!((mid[2] - 0.075).abs() < EPS, "got {}", mid[2]);
-        assert!((mid[0] - 0.4897059).abs() < EPS, "got {}", mid[0]);
-        assert!((mid[1] - 0.4352941).abs() < EPS, "got {}", mid[1]);
+        assert!((mid[2] - 0.10).abs() < EPS, "got {}", mid[2]);
+        assert!((mid[0] - 0.39375).abs() < EPS, "got {}", mid[0]);
+        assert!((mid[1] - 0.50625).abs() < EPS, "got {}", mid[1]);
         // 远观 0.5 px/格：fade=0 → detail=0，全额回流。
         let far = scale_weights(0.5);
         assert!((far[2] - 0.0).abs() < EPS, "got {}", far[2]);
-        // 近观 ≥ 3 px/格：detail 全额 0.15，回到基线 (0.45, 0.40, 0.15)。
+        // 近观 ≥ 3 px/格：detail 全额 0.20，回到基线 (0.35, 0.45, 0.20)。
         for ppc in [3.0, 4.0] {
             let near = scale_weights(ppc);
             assert!(
@@ -614,5 +811,64 @@ mod tests {
             );
             prev_detail = w[2];
         }
+    }
+
+    #[test]
+    fn lch_shade_is_identity_at_full_shade() {
+        // shade=1：无色度补偿（shadow_factor=0）+ L 不缩 → 回路恒等
+        //（±1e-4 是 XYZ↔Lab 往返的浮点残差）。
+        for rgb in [
+            [0.5, 0.5, 0.5],
+            [0.2, 0.7, 0.3],
+            [0.1118, 0.2120, 0.0908], // ramp 低阶 #5E7F55 的线性值（手算）
+            [1.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0],
+        ] {
+            let out = lch_shade(rgb, 1.0, SHADE_CHROMA_BOOST);
+            for k in 0..3 {
+                assert!(
+                    (out[k] - rgb[k]).abs() < 1e-4,
+                    "通道 {k}: in {:?} out {:?}",
+                    rgb,
+                    out
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn lch_shade_white_halves_to_l50_gray() {
+        // 白（linear 1,1,1）→ L=100、C=0；shade=0.5 → L=50 灰。
+        // 手算锚点：L50 灰的线性值 = ((50+16)/116)³ = 0.184187（三通道同值）。
+        let out = lch_shade([1.0, 1.0, 1.0], 0.5, SHADE_CHROMA_BOOST);
+        for (k, v) in out.iter().enumerate() {
+            assert!((v - 0.184187).abs() < 1e-4, "通道 {k} = {v}，期望 0.184187");
+        }
+    }
+
+    #[test]
+    fn lch_shade_keeps_hue_order_and_neutral_never_tints() {
+        // 色相保持：绿色在深阴影下仍是「G 最大」，只是变暗。
+        let green = lch_shade([0.2, 0.7, 0.3], 0.3, SHADE_CHROMA_BOOST);
+        assert!(
+            green[1] > green[0] && green[1] > green[2],
+            "got {:?}",
+            green
+        );
+        assert!(green[1] < 0.7, "明度应下降: got {:?}", green);
+        // 中性灰不染色：C < 1e-4 跳过补偿，三通道严格相等（发灰但不发彩）。
+        let gray = lch_shade([0.5, 0.5, 0.5], 0.2, SHADE_CHROMA_BOOST);
+        assert!(
+            (gray[0] - gray[1]).abs() < 1e-6 && (gray[1] - gray[2]).abs() < 1e-6,
+            "灰被染色: got {:?}",
+            gray
+        );
+        // 输出界内。
+        let deep = lch_shade([0.9, 0.1, 0.1], 0.05, SHADE_CHROMA_BOOST);
+        assert!(
+            deep.iter().all(|c| (0.0..=1.0).contains(c)),
+            "got {:?}",
+            deep
+        );
     }
 }

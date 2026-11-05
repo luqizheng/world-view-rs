@@ -1509,11 +1509,19 @@ impl<'a> CellRenderer<'a> {
             {
                 let mul = self.relief_intensity(cx, gy);
                 let Color::Srgba(c) = color else { return };
-                color = Color::srgb(
-                    (c.red * mul).clamp(0.0, 1.0),
-                    (c.green * mul).clamp(0.0, 1.0),
-                    (c.blue * mul).clamp(0.0, 1.0),
+                // ADR-0101：合成 = LCH(ab) 明度调制（与 GPU `lch_hillshade`
+                // 同源 `shading::lch_shade`）——sRGB → 线性 → 只缩 L / 色相
+                // 不动 / 阴影色度回补 → 回 sRGB。旧 `rgb × mul` 的发灰发脏
+                // 在 CPU 回退路径同样修正；山脊高光是 GPU 装饰层，CPU 回退
+                // 路径不做（分叉已在 ADR-0101 代价节登记）。
+                let lin = Color::srgb(c.red, c.green, c.blue).to_linear();
+                let shaded = crate::shading::lch_shade(
+                    [lin.red, lin.green, lin.blue],
+                    mul,
+                    crate::shading::SHADE_CHROMA_BOOST,
                 );
+                let back = Color::from(LinearRgba::rgb(shaded[0], shaded[1], shaded[2])).to_srgba();
+                color = Color::srgb(back.red, back.green, back.blue);
             }
             let Color::Srgba(c) = color else { return };
             let res = self.res;
@@ -2401,16 +2409,17 @@ mod tests {
     }
 
     /// 平地光照明度（浮雕乘子的「零点」）：梯度恒零 → 法线 (0,0,1) →
-    /// 与两盏 45° 高度角单位灯的点积各 = sin45° = 1/√2 →
-    /// `I = 0.4 + 0.6/√2 ≈ 0.8243`（spec D1 口径）。
+    /// 与两盏单位灯的点积各 = 灯的 z 分量（sin38° = 0.6157 / sin50° =
+    /// 0.7660，ADR-0101）→ `I = 0.33 + 0.52·0.6157 + 0.15·0.7660 ≈
+    /// 0.7651`。
     ///
-    /// **钳制已退役**：不再钳回 1.0——平地整幅统一乘 0.8243 是公式语义
-    ///（`I ∈ [0.4, 1]` 界内免费获得），与 GPU 侧同源（WGSL 直接 dot 同一
+    /// **钳制已退役**：不再钳回 1.0——平地整幅统一乘 0.7488 是公式语义
+    ///（`I` 界内免费获得），与 GPU 侧同源（WGSL 直接 dot 同一
     /// 单位向量常量）。
     fn flat_ground_intensity() -> f32 {
         crate::shading::lighting_intensity(
-            std::f32::consts::FRAC_1_SQRT_2,
-            std::f32::consts::FRAC_1_SQRT_2,
+            crate::shading::LIGHT_MAIN[2],
+            crate::shading::LIGHT_AUX[2],
         )
     }
 
@@ -2454,10 +2463,12 @@ mod tests {
         let span = 50.0 * crate::shading::Z_EXAG;
         let flat = flat_ground_intensity();
         // 手算锚点（s = Z/span = 0.02，台阶梯度 50 单位/格 → s·梯度 = 1，45° 坡）：
-        // 45° 坡法线 (±1/√2, ±1/√2, 1/√2)，与灯的点积 ∈ {0.8536, 0.1464}：
-        // 西向坡 I = 0.4+0.48·0.8536+0.12·0.1464 = 0.8273 > 平地 0.8243；
-        // 北向坡 I = 0.4+0.6·0.8536 = 0.9121（两灯同照）；东向坡
-        // I = 0.4+0.48·0.1464+0.12·0.8536 = 0.5727；南向坡 I = 0.4879。
+        // 45° 坡法线 (±1/√2, ±1/√2, 1/√2)。ADR-0101 灯（38°/50°）下的点积：
+        // 西向坡 n=(−1/√2,0,1/√2)：dot₁=0.8294、dot₂=0.2201 →
+        // I = 0.33+0.52·0.8294+0.15·0.2201 ≈ 0.7943 > 平地 0.7651；
+        // 北向坡 n=(0,1/√2,1/√2)：dot₁=0.8294、dot₂=0.8631 → I ≈ 0.8908
+        // （两灯同照）；东向坡 I ≈ 0.4810；南向坡 I ≈ 0.3846（主光点积
+        // 归零，只剩环境光 + 弱辅光——阴影比旧 45° 灯更深，ADR-0101 目标）。
         let m = relief_renderer(&data_west, &pack, span).relief_intensity(1, 1);
         assert!(m > flat, "西向坡应亮于平地 {flat}，实得 {m}");
         let m = relief_renderer(&data_north, &pack, span).relief_intensity(1, 1);
@@ -2470,9 +2481,9 @@ mod tests {
     }
 
     /// 极端断崖（±9000 邻格高差）：钳制已退役，但 `lighting_intensity`
-    /// 的界内性契约保证乘子**有限**且落在 `[0.4, 1.0]`
-    ///（过渡缺省跨度 10000：s·hx = 0.0025×9000 = 22.5 → 法线贴地 →
-    /// 只剩辅光项 ≈ 0.4 + 0.12·0.46 ≈ 0.455）。
+    /// 的界内性契约保证乘子**有限**且落在 `[0.28, 1.0]`
+    ///（过渡缺省跨度 10000：s·hx = 0.02×9000 = 180 → 法线贴地朝西 →
+    /// 强受主光：I ≈ 0.33 + 0.52·0.557 ≈ 0.62，ADR-0101 灯口径）。
     #[test]
     fn extreme_cliff_mul_stays_finite() {
         let cliff = relief_fixture(|x, _| if x == 0 { 9000 } else { -9000 });
@@ -2481,8 +2492,8 @@ mod tests {
         let m = r.relief_intensity(1, 1);
         assert!(m.is_finite(), "断崖乘子必须有限，得 {m}");
         assert!(
-            (0.4..=1.0).contains(&m),
-            "断崖乘子必须落在公式界内 [0.4, 1.0]，得 {m}"
+            (crate::shading::AMBIENT..=1.0).contains(&m),
+            "断崖乘子必须落在公式界内 [0.33, 1.0]，得 {m}"
         );
     }
 

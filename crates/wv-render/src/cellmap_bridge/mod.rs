@@ -556,9 +556,10 @@ mod bridge_tests {
         );
     }
 
-    /// 跨度桥接（ADR-0092）：`sync_terrain_field` 把「本图高度实际跨度」
-    /// 写进 uniform `shape.w`（WGSL 侧 `s = shape.z / shape.w`）。本测试锁
-    /// 跨度口径与平图下限（桥接封装 `bake_height_span` 与 GPU 填充同源）。
+    /// 跨度桥接（ADR-0092 建制；ADR-0101 起**陆地**口径）：`sync_terrain_field`
+    /// 把「本图陆地高度实际跨度」写进 uniform `shape.w`（WGSL 侧
+    /// `s = shape.z / shape.w`）。本测试锁跨度口径与平图下限（桥接封装
+    /// `bake_height_span` 与 GPU 填充同源）。
     #[test]
     fn span_passthrough_matches_height_span_of() {
         use wv_core::terrain::{TerrainCellData, TerrainData};
@@ -574,12 +575,13 @@ mod bridge_tests {
                 })
                 .collect(),
         };
-        // 跨度 = max−min；与纹理固定域同值时即 `SPAN_RATIO_IDENTITY` 缺省口径。
+        // 跨度 = 陆地（h > 0）max−min；海底深洼（−3000）不参与分母——
+        // 它会灌大分母、稀释陆地浮雕（ADR-0101 的修正动因）。
+        let data = cells(&[-3000, 100, 500]);
         assert!(
-            (wv_world_cell_map::shading::height_span_of(&cells(&[0, 10000])) - 10000.0).abs()
-                < 1e-5,
+            (wv_world_cell_map::shading::height_span_of(&data) - 400.0).abs() < 1e-5,
             "got {}",
-            wv_world_cell_map::shading::height_span_of(&cells(&[0, 10000]))
+            wv_world_cell_map::shading::height_span_of(&data)
         );
         // 平图（跨度 0）→ 下限 1，桥接值有限（shader 除法不炸）。
         let flat = wv_world_cell_map::shading::height_span_of(&cells(&[5, 5]));
