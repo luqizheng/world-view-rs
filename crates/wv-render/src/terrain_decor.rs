@@ -168,8 +168,8 @@ pub enum DecorBand {
 
 /// 缩放 → 装饰档。三档都画：Nation 档是新默认观感的全局地貌层
 /// （ADR-0036 取代 ADR-0031 D2「Nation 不画」的旧口径）。
-pub fn decor_band(view_scale: f32) -> Option<DecorBand> {
-    match lod_tier(view_scale) {
+pub fn decor_band(view_scale: f32, fit: f32) -> Option<DecorBand> {
+    match lod_tier_at(view_scale, fit) {
         crate::state::LodTier::Nation => Some(DecorBand::Nation),
         crate::state::LodTier::Region => Some(DecorBand::Region),
         crate::state::LodTier::Edit => Some(DecorBand::Edit),
@@ -892,7 +892,7 @@ pub fn sync_terrain_decor(
         return;
     }
     // Nation 档画粗步距大地貌团（ADR-0036 取代 ADR-0031 D2/D3）。
-    let Some(band) = decor_band(view.scale) else {
+    let Some(band) = decor_band(view.scale, view.lod_fit) else {
         pools.despawn_all(&mut commands);
         return;
     };
@@ -1303,9 +1303,9 @@ mod tests {
 
     #[test]
     fn all_three_bands_draw_and_nation_is_coarsest() {
-        assert_eq!(decor_band(5.0), Some(DecorBand::Nation));
-        assert_eq!(decor_band(2.0), Some(DecorBand::Region));
-        assert_eq!(decor_band(0.5), Some(DecorBand::Edit));
+        assert_eq!(decor_band(5.0, 5.12), Some(DecorBand::Nation));
+        assert_eq!(decor_band(2.0, 5.12), Some(DecorBand::Region));
+        assert_eq!(decor_band(0.5, 5.12), Some(DecorBand::Edit));
         assert!(
             DecorBand::Nation.spacing_px(&recipe()) > DecorBand::Region.spacing_px(&recipe()),
             "Nation 档步距必须最粗"

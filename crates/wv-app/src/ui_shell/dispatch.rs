@@ -834,7 +834,7 @@ fn open_map_tool(
         // （T10 minor ②）：锁住 / 非 Edit 档静默早退（原注释口径不变）。
         MapToolId::LinePoi(kind) => {
             if !playback.playing
-                && wv_render::state::lod_tier(view.scale) == wv_render::state::LodTier::Edit
+                && wv_render::state::lod_tier_at(view.scale, view.lod_fit) == wv_render::state::LodTier::Edit
             {
                 line_poi.kind = kind;
                 line_poi.tool_active = true;

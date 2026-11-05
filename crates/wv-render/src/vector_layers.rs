@@ -790,7 +790,7 @@ pub fn sync_vector_layers(
                     },
                 ))
             });
-            let river_tier = lod_tier(view.scale);
+            let river_tier = lod_tier_at(view.scale, view.lod_fit);
             let mut river_strokes: Vec<(Vec2, Vec2, f32)> = Vec::new();
             for line in &frame.river_polylines {
                 if !crate::state::rank_visible_at_tier(line.rank, river_tier) {
@@ -824,7 +824,7 @@ pub fn sync_vector_layers(
         // 只画城际干线（rank ≥ 3），Region 加区域级，Edit 全量。缩放不重算
         // 段列（缓存门 road_key 不含 scale），跨档只换 mesh（分档指纹）。
         // 2026-10-22 内容矩阵：接 MODE_TABLE(Roads)——Topographic 下不画。
-        let road_tier = lod_tier(view.scale);
+        let road_tier = lod_tier_at(view.scale, view.lod_fit);
         let road_segments = frame.road_slice_at(road_tier);
         let road_fingerprint = frame.road_fingerprint_at(road_tier);
         if recipe.enabled(PassId::Roads) {
@@ -906,6 +906,7 @@ pub fn sync_vector_layers(
                 &grid,
                 &streets,
                 view.scale,
+                view.lod_fit,
                 major_casing,
                 major_fill,
                 minor_casing,
@@ -954,6 +955,7 @@ pub fn sync_vector_layers(
             &mut meshes,
             &frame.place_dots,
             view.scale,
+            view.lod_fit,
             &grid,
             place_z,
             landmarks_want && landmark_marker == LandmarkMarker::Pin,
@@ -973,6 +975,7 @@ pub fn sync_vector_layers(
             landmarks,
             &frame.landmark_dots,
             view.scale,
+            view.lod_fit,
             crate::landmark_symbols::LANDMARK_Z + layers.place.z_offset,
             white,
         );
@@ -1223,6 +1226,7 @@ fn sync_street_layers(
     grid: &GridConfig,
     streets: &crate::streets::StreetLayerCache,
     view_scale: f32,
+    lod_fit: f32,
     major_casing: Handle<ColorMaterial>,
     major_fill: Handle<ColorMaterial>,
     minor_casing: Handle<ColorMaterial>,
@@ -1231,7 +1235,7 @@ fn sync_street_layers(
     material_changed: bool,
     layer: &mut VectorLayerEntities,
 ) {
-    let tier = lod_tier(view_scale);
+    let tier = lod_tier_at(view_scale, lod_fit);
     let mut major: Vec<(Vec2, Vec2)> = Vec::new();
     let mut minor: Vec<(Vec2, Vec2)> = Vec::new();
     for (rank, segments) in crate::streets::street_streams(&streets.sources) {
@@ -1482,12 +1486,13 @@ fn sync_poi(
     meshes: &mut Assets<Mesh>,
     dots: &[PlaceDot],
     view_scale: f32,
+    lod_fit: f32,
     grid: &GridConfig,
     z_offset: f32,
     landmark_pins: bool,
     layer: &mut VectorLayerEntities,
 ) {
-    let tier = crate::state::lod_tier(view_scale);
+    let tier = crate::state::lod_tier_at(view_scale, lod_fit);
     let selected = select_pois(dots, tier, view_scale);
     let radius_outer = (grid.cell_size * 0.45).max(POI_MIN_SCREEN_PX * view_scale * 0.5);
     let radius_inner = radius_outer * 0.52;
@@ -1545,7 +1550,7 @@ fn sync_poi(
         };
         // 尺寸口径与地物符号同源：局部坐标 = 屏幕像素，只乘 `view_scale`
         // （符号总高 22.5px + LOD 档微调）。
-        let s = landmark_size_tier(view_scale) * view_scale;
+        let s = landmark_size_tier(view_scale, view.lod_fit) * view_scale;
         let mut buckets: Vec<Vec<Vec2>> = vec![Vec::new(); PoiKind::COUNT];
         for d in &selected {
             // rank ≥ 2 的地名已由地物符号层画（更大的 map-pin），这里让位。
@@ -1803,12 +1808,13 @@ fn sync_landmarks(
     landmark: &mut [LandmarkPool; wv_core::distance::PoiKind::COUNT],
     frame_landmarks: &[crate::world_projection::LandmarkDot],
     view_scale: f32,
+    lod_fit: f32,
     z: f32,
     material: Handle<ColorMaterial>,
 ) {
     // 尺寸口径由派发处一次算定（局部坐标 = 屏幕像素，只乘 `view_scale`）：
     // 合批函数只拿最终的 `s`，不再自己推。
-    let s = landmark_size_tier(view_scale) * view_scale;
+    let s = landmark_size_tier(view_scale, lod_fit) * view_scale;
     for (i, kind) in wv_core::distance::PoiKind::ALL.iter().copied().enumerate() {
         sync_landmark_mesh_batches(
             commands,
@@ -1826,8 +1832,8 @@ fn sync_landmarks(
 /// 地物符号的 LOD 尺寸微调：档位越近稍大（Nation 1.0 / Region 1.25 /
 /// Edit 1.5），贴近 Google Maps marker 的恒定手感。独立成函数供回归测试
 /// 推导「世界高 ∝ tier × scale」的精确期望值。
-fn landmark_size_tier(view_scale: f32) -> f32 {
-    match lod_tier(view_scale) {
+fn landmark_size_tier(view_scale: f32, lod_fit: f32) -> f32 {
+    match lod_tier_at(view_scale, lod_fit) {
         crate::state::LodTier::Nation => 1.0,
         crate::state::LodTier::Region => 1.25,
         crate::state::LodTier::Edit => 1.5,
@@ -3226,7 +3232,8 @@ mod tests {
         let zoomed_height = landmark_mesh_top_y(&world);
 
         // 屏幕恒定 ⇒ 世界高度严格 ∝ tier × scale：Region(1.0) → Edit(0.22)。
-        let expected_ratio = (landmark_size_tier(0.22) * 0.22) / (landmark_size_tier(1.0) * 1.0);
+        let expected_ratio =
+            (landmark_size_tier(0.22, 5.12) * 0.22) / (landmark_size_tier(1.0, 5.12) * 1.0);
         let actual_ratio = zoomed_height / baked_height;
         assert!(
             (actual_ratio - expected_ratio).abs() < 1e-4,

@@ -52,13 +52,14 @@ pub fn sync_isoline_overlay(
     } else {
         conv_treatment(&view.active_theme.treatment)
     };
-    let nation = view.scale >= crate::state::LOD_NATION_SCALE;
+    let nation = view.scale >= crate::state::LOD_NATION_RATIO * view.lod_fit;
     // 海岸线 only：远观（Nation 档）与专业制图都不画类型边界场——后者的
     // 群系边界由**矢量面填充**（`biome_fill`）承担，再叠一层阶梯线是双线。
     let coast_only = nation || cartographic;
     // 高程等高线档门（ADR-0102）：主线跟随 `!coast_only`（Region/Edit 都
     // 在，Nation/专业制图关）；副线只在 Edit 档（`contour_sub` 键位消费）。
-    let contour_sub_on = !coast_only && view.scale < crate::state::LOD_REGION_SCALE;
+    let contour_sub_on =
+        !coast_only && view.scale < crate::state::LOD_REGION_RATIO * view.lod_fit;
     let key = IsolineKey {
         map: tex.last_map.clone(),
         size: tex.size,

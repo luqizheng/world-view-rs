@@ -339,7 +339,7 @@ impl LabelOccupancy {
 
 /// 每帧链首清场（ADR-0073）：预算按当前 LOD 档重设。
 pub fn reset_label_occupancy(mut occupancy: ResMut<LabelOccupancy>, view: Res<ViewState>) {
-    occupancy.reset(budgets_for_tier(lod_tier(view.scale)));
+    occupancy.reset(budgets_for_tier(lod_tier_at(view.scale, view.lod_fit)));
 }
 
 /// 密度预算表（ADR-0073）：`[Place, Street, Faction, Event, Region, Sea]`。

@@ -27,7 +27,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 
 use crate::layer_frame::LayerFrame;
-use crate::state::{lod_fade, GridConfig, ViewState, WorldProjection, LOD_NATION_SCALE};
+use crate::state::{lod_fade, GridConfig, ViewState, WorldProjection, LOD_NATION_RATIO};
 
 /// 挤出高度换算：世界单位 / 米。**待裁**（README §12-31(b)）：真实比例
 /// 还是美化夸张未定；1.0 直译是最易回退的起点。
@@ -206,7 +206,7 @@ pub fn sync_building_overlays(
 ) {
     let current = drill.current();
     // Nation 档不再硬剔除：可见度随 `lod_fade` 平滑趋 0（spec §4.2）。
-    let vis = 1.0 - lod_fade(view.scale, LOD_NATION_SCALE);
+    let vis = 1.0 - lod_fade(view.scale, view.lod_fit * LOD_NATION_RATIO);
     if !layers.building.visible
         || vis <= 0.0
         || grid.cell_size <= 0.0

@@ -215,6 +215,12 @@ pub struct ViewState {
     pub active_theme: &'static crate::theme::theme_pack::ThemePack,
     /// 相机缩放（渲染层钳制范围）。
     pub scale: f32,
+    /// 当前级的全图适配缩放（ADR-0103）：`fit_scale(当前图 extent, 窗口)`，
+    /// LOD 比例阈值（[`LOD_NATION_RATIO`] / [`LOD_REGION_RATIO`]) 的分母。
+    /// 由 `wv-app::seed_drill_state` 每帧随 `current_map` 镜像一并维护；
+    /// 缺省 = [`LOD_FALLBACK_FIT`]（4096²/800px 锚点）——探针 / 测试 /
+    /// 启动首帧前行为与旧绝对口径一致。
+    pub lod_fit: f32,
     /// 相机中心（世界坐标）。
     pub camera_center: Vec2,
     /// 地形纹理是否可见（图层开关之一）。
@@ -343,6 +349,7 @@ impl Default for ViewState {
         Self {
             mode: ViewMode::default(),
             scale: 1.0,
+            lod_fit: LOD_FALLBACK_FIT,
             map_palette: Default::default(),
             active_theme: &crate::theme::theme_pack::builtin::DEFAULT,
             camera_center: Vec2::ZERO,
@@ -397,16 +404,40 @@ pub enum LodTier {
 
 /// 国家档阈值：scale ≥ 此值视为「世界级视野」。
 ///
-/// 依据：4096² 世界 / 800px 窗口高 = 5.12（全图），3.0 ≈ 可见世界宽度的 60%。
+/// **历史锚点（ADR-0103 起退役为锚/缺省值）**：4096² 世界 / 800px 窗口高 =
+/// 5.12（全图），3.0 ≈ 可见世界宽度的 60%。活跃口径是比例阈值
+/// [`LOD_NATION_RATIO`] × 当前级 `fit`（[`ViewState::lod_fit`]）——绝对
+/// 常量绑死 4096 图假设，城市图（fit = 1.28、外界 2.0）永远到不了
+/// Nation 档；比例口径在小图上阈值整体下移，档位语义跨图幅成立。
 pub const LOD_NATION_SCALE: f32 = 3.0;
-/// 省级下限：scale < 此值视为「编辑级视野」。
+/// 省级下限：scale < 此值视为「编辑级视野」（历史锚点，同上）。
 pub const LOD_REGION_SCALE: f32 = 1.0;
 
-/// 由视图缩放求当前视野层级。纯函数，渲染各系统共用同一口径。
-pub fn lod_tier(view_scale: f32) -> LodTier {
-    if view_scale >= LOD_NATION_SCALE {
+/// 国家档**比例**阈值（ADR-0103）：`scale ≥ LOD_NATION_RATIO × fit`。
+///
+/// = 3.0 / 5.12——4096 图 / 800px 窗口下与旧绝对常量**逐位重合**（零行为
+/// 变化的锚点），小图上随 `fit` 整体下移。
+pub const LOD_NATION_RATIO: f32 = 3.0 / 5.12;
+/// 省级比例阈值（ADR-0103）：= 1.0 / 5.12，同上。
+pub const LOD_REGION_RATIO: f32 = 1.0 / 5.12;
+
+/// 缺省 fit（4096² / 800px 的历史锚点）：`lod_fit` 未维护（探针 / 测试 /
+/// 启动首帧前）时的回落——行为与旧绝对口径完全一致。
+pub const LOD_FALLBACK_FIT: f32 = 5.12;
+
+/// 由视图缩放求当前视野层级（ADR-0103 比例口径）。纯函数，渲染各系统共用
+/// 同一口径。`fit` = 当前级的全图适配缩放（[`ViewState::lod_fit`]，由
+/// `wv-app::seed_drill_state` 每帧维护）；非有限/非正时回落
+/// [`LOD_FALLBACK_FIT`]——绝不产出 NaN 比较（恒 false → 永远 Edit 档）。
+pub fn lod_tier_at(view_scale: f32, fit: f32) -> LodTier {
+    let fit = if fit.is_finite() && fit > 0.0 {
+        fit
+    } else {
+        LOD_FALLBACK_FIT
+    };
+    if view_scale >= LOD_NATION_RATIO * fit {
         LodTier::Nation
-    } else if view_scale >= LOD_REGION_SCALE {
+    } else if view_scale >= LOD_REGION_RATIO * fit {
         LodTier::Region
     } else {
         LodTier::Edit
@@ -514,13 +545,41 @@ mod lod_tests {
     #[test]
     fn lod_tier_splits_at_exact_thresholds() {
         // 边界值：阈值本身归更高档（含闭区间语义）。
-        assert_eq!(lod_tier(LOD_NATION_SCALE), LodTier::Nation);
-        assert_eq!(lod_tier(LOD_REGION_SCALE), LodTier::Region);
-        assert_eq!(lod_tier(LOD_REGION_SCALE - 0.001), LodTier::Edit);
+        assert_eq!(lod_tier_at(LOD_NATION_SCALE, LOD_FALLBACK_FIT), LodTier::Nation);
+        assert_eq!(lod_tier_at(LOD_REGION_SCALE, LOD_FALLBACK_FIT), LodTier::Region);
+        assert_eq!(
+            lod_tier_at(LOD_REGION_SCALE - 0.001, LOD_FALLBACK_FIT),
+            LodTier::Edit
+        );
         // 常规值。
-        assert_eq!(lod_tier(0.1), LodTier::Edit);
-        assert_eq!(lod_tier(1.5), LodTier::Region);
-        assert_eq!(lod_tier(5.12), LodTier::Nation);
+        assert_eq!(lod_tier_at(0.1, LOD_FALLBACK_FIT), LodTier::Edit);
+        assert_eq!(lod_tier_at(1.5, LOD_FALLBACK_FIT), LodTier::Region);
+        assert_eq!(lod_tier_at(5.12, LOD_FALLBACK_FIT), LodTier::Nation);
+    }
+
+    /// ADR-0103 比例口径：城市图（fit = 1.28）阈值整体下移——旧绝对口径下
+    /// 城市图外界 2.0 < 3.0 永远到不了 Nation 档，比例口径在 0.75 就到。
+    #[test]
+    fn lod_tier_at_scales_thresholds_with_the_current_level_fit() {
+        let city_fit = 1.28;
+        assert_eq!(lod_tier_at(2.0, city_fit), LodTier::Nation, "城市图外界即可达 Nation");
+        assert_eq!(lod_tier_at(0.75, city_fit), LodTier::Nation);
+        assert_eq!(lod_tier_at(0.25, city_fit), LodTier::Region);
+        assert_eq!(lod_tier_at(0.2, city_fit), LodTier::Edit);
+        // 4096 图（fit = 5.12）与旧绝对常量逐位重合。
+        assert_eq!(lod_tier_at(3.0, 5.12), LodTier::Nation);
+        assert_eq!(lod_tier_at(2.99, 5.12), LodTier::Region);
+        assert_eq!(lod_tier_at(1.0, 5.12), LodTier::Region);
+        assert_eq!(lod_tier_at(0.999, 5.12), LodTier::Edit);
+    }
+
+    /// fit 退化（NaN / 0 / 负）回落锚点，不产出 NaN 比较导致档位死锁。
+    #[test]
+    fn lod_tier_at_falls_back_on_degenerate_fit() {
+        for bad in [f32::NAN, 0.0, -1.0, f32::INFINITY] {
+            assert_eq!(lod_tier_at(3.0, bad), LodTier::Nation, "fit={bad}");
+            assert_eq!(lod_tier_at(0.1, bad), LodTier::Edit, "fit={bad}");
+        }
     }
 
     /// 呈现门槛逐档手算（ADR-0030 D2）：Nation 只放行 3，Region 放行 2+，

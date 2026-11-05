@@ -233,7 +233,7 @@ pub fn commit_point_select_on_click(
             &grid,
             layers.place.visible,
             view.scale,
-            wv_render::state::lod_tier(view.scale),
+            wv_render::state::lod_tier_at(view.scale, view.lod_fit),
         ) {
             sel.clear();
             projection.selection = Some(SelectedEntity::new(EntityKind::Place, id));

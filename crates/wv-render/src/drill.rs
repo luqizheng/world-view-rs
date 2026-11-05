@@ -779,7 +779,7 @@ pub fn drill_pick(
                 &grid,
                 picks.layers.place.visible,
                 view.scale,
-                lod_tier(view.scale),
+                lod_tier_at(view.scale, view.lod_fit),
             ) {
                 projection.selection =
                     Some(wv_core::SelectedEntity::new(wv_core::EntityKind::Place, id));
@@ -1293,7 +1293,7 @@ pub fn update_place_labels(
     // ADR-0017 Q1：标签走独立渲染组 `layers.label.visible`；
     // ADR-0013 §2.2：地名随 Place 图层（`layers.place.visible`）。
     // 两者合取——任一关闭即标签消失。
-    let tier = lod_tier(view.scale);
+    let tier = lod_tier_at(view.scale, view.lod_fit);
     let t = playback.current_day;
     let unit_scale = view.scale.max(0.05);
     // 屏幕对齐（2026-10-14 用户裁定）：候选偏移的「屏幕方位」经相机旋转映回

@@ -126,7 +126,7 @@ pub fn drag_place_pin_on_hold(
             &grid,
             layers.place.visible,
             view.scale,
-            wv_render::state::lod_tier(view.scale),
+            wv_render::state::lod_tier_at(view.scale, view.lod_fit),
         );
         if is_double {
             // 双击 = 属性窗（仅 CellMap；浏览族双击归下钻）。
