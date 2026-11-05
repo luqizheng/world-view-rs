@@ -31,7 +31,7 @@ use bevy::render::render_resource::{PrimitiveTopology, VertexFormat};
 
 use crate::layer_frame::LayerFrame;
 use crate::recipe::{PassId, RenderRecipe};
-use crate::state::{lod_tier, GridConfig, ViewState, WorldProjection};
+use crate::state::{lod_tier_at, GridConfig, ViewState, WorldProjection};
 use crate::terrain_view::terrain_resolve::active_terrain;
 use crate::theme::decor::{DecorRecipe, SymbolStyle};
 use wv_terrain::biome::{

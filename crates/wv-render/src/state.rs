@@ -545,8 +545,14 @@ mod lod_tests {
     #[test]
     fn lod_tier_splits_at_exact_thresholds() {
         // 边界值：阈值本身归更高档（含闭区间语义）。
-        assert_eq!(lod_tier_at(LOD_NATION_SCALE, LOD_FALLBACK_FIT), LodTier::Nation);
-        assert_eq!(lod_tier_at(LOD_REGION_SCALE, LOD_FALLBACK_FIT), LodTier::Region);
+        assert_eq!(
+            lod_tier_at(LOD_NATION_SCALE, LOD_FALLBACK_FIT),
+            LodTier::Nation
+        );
+        assert_eq!(
+            lod_tier_at(LOD_REGION_SCALE, LOD_FALLBACK_FIT),
+            LodTier::Region
+        );
         assert_eq!(
             lod_tier_at(LOD_REGION_SCALE - 0.001, LOD_FALLBACK_FIT),
             LodTier::Edit
@@ -562,7 +568,11 @@ mod lod_tests {
     #[test]
     fn lod_tier_at_scales_thresholds_with_the_current_level_fit() {
         let city_fit = 1.28;
-        assert_eq!(lod_tier_at(2.0, city_fit), LodTier::Nation, "城市图外界即可达 Nation");
+        assert_eq!(
+            lod_tier_at(2.0, city_fit),
+            LodTier::Nation,
+            "城市图外界即可达 Nation"
+        );
         assert_eq!(lod_tier_at(0.75, city_fit), LodTier::Nation);
         assert_eq!(lod_tier_at(0.25, city_fit), LodTier::Region);
         assert_eq!(lod_tier_at(0.2, city_fit), LodTier::Edit);

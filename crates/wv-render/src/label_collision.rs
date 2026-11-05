@@ -29,7 +29,7 @@
 use bevy::math::Vec2;
 use bevy::prelude::{Res, ResMut, Resource, SystemSet};
 
-use crate::state::{lod_tier, LodTier, ViewState};
+use crate::state::{lod_tier_at, LodTier, ViewState};
 
 /// 钻取标签链集合（ADR-0073）：drill.rs `register` 的标签系统 chain 挂在
 /// 这个集合下。

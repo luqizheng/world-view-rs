@@ -32,7 +32,7 @@ use bevy::render::render_resource::PrimitiveTopology;
 
 use crate::layer_frame::LayerFrame;
 use crate::recipe::{PassId, RenderRecipe};
-use crate::state::{lod_tier, GridConfig, ViewState};
+use crate::state::{lod_tier_at, GridConfig, ViewState};
 use crate::theme::colors_google::{
     GOOGLE_PLACE_DOT, GOOGLE_POI_ARENA, GOOGLE_POI_CAMP, GOOGLE_POI_DANGER, GOOGLE_POI_EDUCATION,
     GOOGLE_POI_FOOD, GOOGLE_POI_FORTRESS, GOOGLE_POI_GOVERNMENT, GOOGLE_POI_LODGING,
@@ -1550,7 +1550,7 @@ fn sync_poi(
         };
         // 尺寸口径与地物符号同源：局部坐标 = 屏幕像素，只乘 `view_scale`
         // （符号总高 22.5px + LOD 档微调）。
-        let s = landmark_size_tier(view_scale, view.lod_fit) * view_scale;
+        let s = landmark_size_tier(view_scale, lod_fit) * view_scale;
         let mut buckets: Vec<Vec<Vec2>> = vec![Vec::new(); PoiKind::COUNT];
         for d in &selected {
             // rank ≥ 2 的地名已由地物符号层画（更大的 map-pin），这里让位。

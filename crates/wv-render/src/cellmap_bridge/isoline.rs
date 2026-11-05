@@ -58,8 +58,7 @@ pub fn sync_isoline_overlay(
     let coast_only = nation || cartographic;
     // 高程等高线档门（ADR-0102）：主线跟随 `!coast_only`（Region/Edit 都
     // 在，Nation/专业制图关）；副线只在 Edit 档（`contour_sub` 键位消费）。
-    let contour_sub_on =
-        !coast_only && view.scale < crate::state::LOD_REGION_RATIO * view.lod_fit;
+    let contour_sub_on = !coast_only && view.scale < crate::state::LOD_REGION_RATIO * view.lod_fit;
     let key = IsolineKey {
         map: tex.last_map.clone(),
         size: tex.size,

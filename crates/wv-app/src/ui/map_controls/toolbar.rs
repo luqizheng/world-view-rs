@@ -446,8 +446,10 @@ pub fn map_controls(
                         // minor ①）：播放中灰化不可点，与写入口工具同一
                         // Gate-1 口径。
                         let lp = MapToolId::LinePoi(line_poi.kind);
-                        let lp_lod_ok =
-                            line_poi_tile_visible(wv_render::state::lod_tier_at(view.scale, view.lod_fit));
+                        let lp_lod_ok = line_poi_tile_visible(wv_render::state::lod_tier_at(
+                            view.scale,
+                            view.lod_fit,
+                        ));
                         let lp_hint = if !cell_tools_enabled {
                             locked_hint
                         } else if !ws(lp) {

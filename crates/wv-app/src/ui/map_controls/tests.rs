@@ -86,7 +86,7 @@ fn vertical_dock_fits_above_the_timeline() {
 /// 同源走一遍（阈值 1.0 / 3.0，见 `wv_render::state` 常量）。
 #[test]
 fn line_poi_tile_hidden_outside_edit_tier() {
-    use wv_render::state::{lod_tier, LodTier};
+    use wv_render::state::{lod_tier_at, LodTier};
 
     assert!(
         line_poi_tile_visible(LodTier::Edit),
@@ -101,18 +101,19 @@ fn line_poi_tile_hidden_outside_edit_tier() {
         "Nation 档不得显示线段 POI 入口"
     );
 
-    // 与真实视野求值同源：scale 0.5（近）= Edit，1.0 = Region 下界，3.0 = Nation 下界。
+    // 与真实视野求值同源：fit = 5.12（4096 图锚点）下 scale 0.5（近）=
+    // Edit，1.0 = Region 下界，3.0 = Nation 下界（ADR-0103 比例口径）。
     assert!(
-        line_poi_tile_visible(lod_tier(0.5)),
+        line_poi_tile_visible(lod_tier_at(0.5, 5.12)),
         "scale 0.5 应视为 Edit 档"
     );
     assert!(
-        !line_poi_tile_visible(lod_tier(1.0)),
-        "scale 1.0 应视为 Region 档（≥ LOD_REGION_SCALE）"
+        !line_poi_tile_visible(lod_tier_at(1.0, 5.12)),
+        "scale 1.0 应视为 Region 档（≥ LOD_REGION_RATIO × fit）"
     );
     assert!(
-        !line_poi_tile_visible(lod_tier(3.0)),
-        "scale 3.0 应视为 Nation 档（≥ LOD_NATION_SCALE）"
+        !line_poi_tile_visible(lod_tier_at(3.0, 5.12)),
+        "scale 3.0 应视为 Nation 档（≥ LOD_NATION_RATIO × fit）"
     );
 }
 

@@ -46,7 +46,9 @@
 use bevy::prelude::*;
 
 use crate::layer_frame::LayerFrame;
-use crate::state::{lod_tier, DrillState, GridConfig, PlaybackState, ViewState, WorldProjection};
+use crate::state::{
+    lod_tier_at, DrillState, GridConfig, PlaybackState, ViewState, WorldProjection,
+};
 use wv_core::id::Id;
 use wv_core::map::{Extent, IconShape, IconSpec, MapLevel, MapNode};
 
