@@ -47,6 +47,9 @@ pub(super) fn register(app: &mut App) {
             // 分支进 `FieldKey`，必须先于首帧场同步，否则首帧按默认 CellFlat
             // 打、第二帧才换 BiomeRaw（白付一次重打）。
             crate::debug_probe::apply_env_cell_raw,
+            // `WV_ISOLINES` 等值线旗标探针（ADR-0102 截图验收）：启动读一次
+            // 的会话旗标，先于首帧渲染即可，放同组链尾。
+            crate::debug_probe::apply_env_isolines,
             setup_camera,
             setup_terrain_texture_after_world,
         )

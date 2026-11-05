@@ -108,6 +108,18 @@ pub fn apply_env_cell_raw(mut view: ResMut<ViewState>) {
     }
 }
 
+/// `WV_ISOLINES`：等值线会话旗标探针（ADR-0102 截图验收件），启动读一次，
+/// 存在即真——把 [`ViewState::isolines`] 置位，等价于点击地图工具条的
+/// 「等值线」瓷砖（该旗标默认关、只此一处 UI 写入口，无命令/HTTP 通路）。
+/// 无高程等高线env 通路就没法从命令行截到等高线画面，本探针补齐；
+/// 与 `WV_SHOT`（第 120 帧落盘）、`WV_SCALE`（同机位锚）配套。
+pub fn apply_env_isolines(mut view: ResMut<ViewState>) {
+    if std::env::var_os("WV_ISOLINES").is_some() {
+        view.isolines = true;
+        info!("[wv] WV_ISOLINES → isolines = true（等值线会话旗标）");
+    }
+}
+
 /// `WV_SCALE=<f32>`：钉死相机缩放（世界单位/屏幕像素）——对比帧采集的
 /// **同机位锚**（ADR-0088 Task 4）。与 `WV_DRILL` 配套：钻入过渡
 /// （`drill_transition`）每帧写 `view.scale`，本探针必须等过渡结束

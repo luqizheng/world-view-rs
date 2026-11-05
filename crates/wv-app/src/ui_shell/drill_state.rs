@@ -6,7 +6,6 @@ use bevy::prelude::*;
 
 use crate::state::{DrillState, GridConfig, ViewState, WorldProjection};
 use wv_render::zoom_level::fit_scale;
-use wv_render::LOD_FALLBACK_FIT;
 
 /// 把钻取路径钉到根图（`world.meta.root_map`），并镜像到 [`ViewState::current_map`]。
 ///
