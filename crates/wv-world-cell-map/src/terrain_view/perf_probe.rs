@@ -161,7 +161,21 @@ fn perf_probe_isoline_dp() {
     };
     // tol = 0.25（scale 0.5 档，中近观；DP 成本随 tol 变小而升，这是偏保守的一档）。
     let ms = best_ms(|| {
-        let out = assemble_strokes(&coast, &kinds, 0.25, 0.5, 1.0, treatment);
+        let out = assemble_strokes(
+            &coast,
+            &kinds,
+            &[],
+            &[],
+            0.25,
+            0.5,
+            1.0,
+            crate::terrain_view::isoline_overlay::ContourParams {
+                main_half: 0.4,
+                sub_half: 0.3,
+                want_sub: false,
+            },
+            treatment,
+        );
         assert!(!out.0.is_empty(), "起伏地形应有海岸链");
     });
     report(

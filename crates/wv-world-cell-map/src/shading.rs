@@ -170,6 +170,12 @@ pub const SHADE_CHROMA_BOOST: f32 = 0.12;
 /// **首版标定值，实机验收后可调**（改这里 = 改 Browse/Map 的海色）。
 pub const WATER_SRGB: [f32; 3] = [0.1647059, 0.3647059, 0.5607843];
 
+/// 内陆湖色向色带偏移强度（ADR-0102）：湖面（水面 ∧ 本格存储高度 ≥ 海平面）
+/// 的水色向该海拔的色带色混此比例——高山湖取高阶冷调、低湖近水色，与周边
+/// 陆地色带衔接（外部制图评审 §④「湖是卡在某一海拔平面的水体」）。海
+/// （高度 < 0）不偏。GPU Themed 分支专用；CPU 回退路径不跟进（分叉登记）。
+pub const LAKE_TINT_RAMP: f32 = 0.35;
+
 /// detail 权重衰减曲线起点（px/格）：低于此分辨率细纹理全是噪点，
 /// detail 权重归零。
 pub const DETAIL_FADE_MIN_PX_PER_CELL: f32 = 1.0;
@@ -757,6 +763,11 @@ mod tests {
                 && (WATER_SRGB[2] - 0.5607843).abs() < 1e-6,
             "WATER_SRGB = {:?} 应为 #2A5D8F",
             WATER_SRGB
+        );
+        assert!(
+            (LAKE_TINT_RAMP - 0.35).abs() < EPS,
+            "got {}",
+            LAKE_TINT_RAMP
         );
     }
 

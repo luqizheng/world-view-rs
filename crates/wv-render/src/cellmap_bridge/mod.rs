@@ -27,7 +27,9 @@ use wv_world_cell_map::state::{
 };
 use wv_world_cell_map::terrain_view::rebuild::{PendingTerrainSynth, SynthCtx};
 // 桥接系统消费的引擎件（含 crate 内部件）——原文件级 use 随函数迁居此处（ADR-0054 D5）。
-use wv_terrain::isoline::{assemble_chains, chaikin, height_segments, kind_segments, simplify_dp};
+use wv_terrain::isoline::{
+    assemble_chains, chaikin, height_segments, kind_segments, multi_level_segments, simplify_dp,
+};
 use wv_world_cell_map::cell_flash::*;
 use wv_world_cell_map::cell_selection::*;
 use wv_world_cell_map::region_overlay::*;

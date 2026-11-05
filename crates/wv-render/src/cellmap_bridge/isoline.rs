@@ -56,6 +56,9 @@ pub fn sync_isoline_overlay(
     // 海岸线 only：远观（Nation 档）与专业制图都不画类型边界场——后者的
     // 群系边界由**矢量面填充**（`biome_fill`）承担，再叠一层阶梯线是双线。
     let coast_only = nation || cartographic;
+    // 高程等高线档门（ADR-0102）：主线跟随 `!coast_only`（Region/Edit 都
+    // 在，Nation/专业制图关）；副线只在 Edit 档（`contour_sub` 键位消费）。
+    let contour_sub_on = !coast_only && view.scale < crate::state::LOD_REGION_SCALE;
     let key = IsolineKey {
         map: tex.last_map.clone(),
         size: tex.size,
@@ -72,6 +75,9 @@ pub fn sync_isoline_overlay(
         // 且专业制图切换必须让键失配——否则从 VectorFlat 切到 GoogleMap 会命中
         // 上一模式的类型边界链（双线 / 残留）。
         nation: coast_only,
+        // 副等高线只在 Edit 档绘制：Region↔Edit 跨档改变网格内容，键必须
+        // 失配（链缓存不受影响，只重跑 DP + mesh）。
+        contour_sub: contour_sub_on,
     };
     let structural_same = overlay.key.as_ref() == Some(&key);
     let dirty_pending = tex.chunks_dirty.is_some();
@@ -127,6 +133,16 @@ pub fn sync_isoline_overlay(
     } else {
         (STROKE_PX * 0.5 * view.scale).max(grid.cell_size * 0.03)
     };
+    // 等高线半宽（ADR-0102）：与墨线同一亚线性口径 + 世界下限。
+    let half_for = |px: f32| {
+        if treatment.ink_sublinear {
+            stroke_half_world(px, view.scale, grid.cell_size * 0.03)
+        } else {
+            (px * 0.5 * view.scale).max(grid.cell_size * 0.03)
+        }
+    };
+    let contour_main_half = half_for(CONTOUR_MAIN_PX);
+    let contour_sub_half = half_for(CONTOUR_SUB_PX);
     // 类型边界加宽：格缘阶梯被 Chaikin 磨角后，平滑曲线偏离原阶梯至多约
     // 0.3 格——细线盖不住露出的「错色台阶」，按格径给足半宽才压得平。
     let kind_half = thin_half.max(grid.cell_size * KIND_STROKE_CELL);
@@ -173,21 +189,57 @@ pub fn sync_isoline_overlay(
                     .collect()
             })
             .unwrap_or_default();
+        // 高程等高线（ADR-0102）：与类型边界同一套「预抽稀 + Chaikin」——
+        // 高度场等值线同样是对偶格 staircase。主级单级提取；副级表单遍
+        // 多级提取（`multi_level_segments`，35 级只扫一遍图）。 Nation /
+        // 专业制图不提取（coast_only）。
+        let (elev_main_smoothed, elev_sub_smoothed) = if coast_only {
+            (Vec::new(), Vec::new())
+        } else {
+            let h_at = |x: u32, y: u32| cell(x, y).height as f32;
+            let smooth = |segs: Vec<wv_terrain::isoline::Seg>| {
+                assemble_chains(&segs)
+                    .into_iter()
+                    .map(|c| {
+                        let pts = simplify_dp(&c.pts, c.closed, 0.30);
+                        (chaikin(&pts, c.closed, 2), c.closed)
+                    })
+                    .collect::<Vec<IsolineChain>>()
+            };
+            let main = height_segments(w, h, h_at, CONTOUR_MAIN_M);
+            let mut max_land = 0i32;
+            for c in &data.cells {
+                if c.height > 0 {
+                    max_land = max_land.max(c.height as i32);
+                }
+            }
+            let sub = multi_level_segments(w, h, h_at, &contour_sub_levels(max_land));
+            (smooth(main), smooth(sub))
+        };
         overlay.chains = Some(CachedChains {
             inputs: chain_inputs,
             coast_smoothed,
             kinds_smoothed,
+            elev_main_smoothed,
+            elev_sub_smoothed,
         });
     }
     // 缩放热路径：只跑 DP + 半宽。
-    let (strokes, coast_halo_inner, coast_halo_outer, coast_river) = {
+    let (strokes, coast_halo_inner, coast_halo_outer, coast_river, contour_sub_strokes) = {
         let chains = overlay.chains.as_ref().expect("上面刚建立");
         assemble_strokes(
             &chains.coast_smoothed,
             &chains.kinds_smoothed,
+            &chains.elev_main_smoothed,
+            &chains.elev_sub_smoothed,
             tol,
             thin_half,
             kind_half,
+            ContourParams {
+                main_half: contour_main_half,
+                sub_half: contour_sub_half,
+                want_sub: contour_sub_on,
+            },
             treatment,
         )
     };
@@ -196,7 +248,22 @@ pub fn sync_isoline_overlay(
         // 空几何（无等值线）也是稳态：0 顶点 mesh 会踩 bevy #24874
         // （MeshAllocator 误报 Use-after-free），退场不插；键记为「空已定」，
         // 下一帧走 `empty_settled` 快路，不重算。
+        // 副等高线仍可能在场（主级/海岸全空但百米级有交点的极端图）——
+        // 先补副线再落稳态键（ADR-0102）。
         overlay.despawn(&mut commands);
+        let pal = conv_palette(&view.active_theme.palette);
+        spawn_contour_sub(
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            &mut overlay,
+            &contour_sub_strokes,
+            grid.raster_origin,
+            grid.cell_size,
+            ISOLINE_Z + layers.terrain.z_offset,
+            pal.isoline_ink,
+            layers.terrain.opacity,
+        );
         overlay.key = Some(key);
         overlay.data_hash = Some(data_hash);
         overlay.ink_palette = Some(view.active_theme.id);
@@ -224,6 +291,21 @@ pub fn sync_isoline_overlay(
         .id();
     overlay.entity = Some(entity);
     overlay.mesh = Some(handle);
+
+    // 副等高线（ADR-0102）：淡 alpha 独立层，z 在主线下方一点点（视觉上
+    // 主线压副线）。
+    spawn_contour_sub(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        &mut overlay,
+        &contour_sub_strokes,
+        grid.raster_origin,
+        grid.cell_size,
+        ISOLINE_Z - 0.001 + layers.terrain.z_offset,
+        pal.isoline_ink,
+        layers.terrain.opacity,
+    );
 
     // 水彩外晕（手绘地图 #4）：仅当海岸链非空时生成。晕在主线下层（z 更小），
     // 避免遮住主线。alpha 渐变（`HALO_*_ALPHA`）实现水彩晕染感。
@@ -286,4 +368,40 @@ pub fn sync_isoline_overlay(
     overlay.key = Some(key);
     overlay.data_hash = Some(terrain_data_hash(data));
     overlay.ink_palette = Some(view.active_theme.id);
+}
+
+/// 副等高线（100 m，ADR-0102）：淡 alpha 独立 mesh + 材质成桩。
+///
+/// 与主墨线分层的理由：副线密度高（每 100 m 一条），同 alpha 会抢主线；
+/// 淡墨（`ISOLINE_BASE_ALPHA × CONTOUR_SUB_ALPHA`）+ 细宽读作「辅助读坡」。
+/// 空描边直接退场（不写槽位）；palette/opacity 变化由
+/// `apply_material_colors` 统一刷新（该函数已含本槽位）。
+#[allow(clippy::too_many_arguments)]
+fn spawn_contour_sub(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<ColorMaterial>>,
+    overlay: &mut IsolineOverlay,
+    sub_strokes: &[(Vec<wv_terrain::isoline::Pt>, bool, f32)],
+    origin: Vec2,
+    cell_size: f32,
+    z: f32,
+    ink: Color,
+    opacity: f32,
+) {
+    let Some(mesh) = build_stroke_mesh(sub_strokes, origin, cell_size) else {
+        return;
+    };
+    let handle = meshes.add(mesh);
+    let mat = materials.add(ColorMaterial::from_color(
+        ink.with_alpha(ISOLINE_BASE_ALPHA * CONTOUR_SUB_ALPHA * opacity),
+    ));
+    let e = commands
+        .spawn((
+            Mesh2d(handle.clone()),
+            MeshMaterial2d(mat.clone()),
+            Transform::from_xyz(0.0, 0.0, z),
+        ))
+        .id();
+    overlay.contour_sub = Some((e, handle, mat));
 }

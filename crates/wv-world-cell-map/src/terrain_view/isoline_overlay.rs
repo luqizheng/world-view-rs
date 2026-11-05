@@ -26,7 +26,9 @@ use crate::palette::{CellPalette, TreatmentFlags};
 
 /// 等值线本色的 alpha（作者未给 Terrain 图层设 opacity 时的值）。
 /// 墨色本体走 `PaletteColors.isoline_ink`（ADR-0016：日间褐墨 / 暮色浅墨）。
-const ISOLINE_BASE_ALPHA: f32 = 1.0;
+/// ADR-0102 起 `pub`：wv-render 副等高线层以 `基准 × CONTOUR_SUB_ALPHA`
+/// 派生淡墨，两crate共用同一基准。
+pub const ISOLINE_BASE_ALPHA: f32 = 1.0;
 
 /// 叠加层 Z：底图块（`TERRAIN_Z = 0.0`）之上、换级淡化精灵（0.05）与道路
 /// （`ROAD_Z = 0.1`）之下——等值线属于底图的一部分。
@@ -53,6 +55,37 @@ pub fn stroke_half_world(base_px: f32, scale: f32, floor: f32) -> f32 {
 /// 类型边界描边的格径半宽（× cell_size）：盖住「阶梯 → Chaikin 平滑」的
 /// 偏差 + 填充的像素量化，让类型边界读作一条画上去的墨线。
 pub const KIND_STROKE_CELL: f32 = 0.25;
+
+// ── 高程等高线（ADR-0102，2026-11-05）─────────────────────────────────
+/// 主等高线间距（米，**绝对米语义**——与 `hypsometric::DOMAIN_CUTS` 同一
+/// 口径：作者高度 = 米，色阶/等高线/雪线共享一套海拔轴）。
+pub const CONTOUR_MAIN_M: f32 = 500.0;
+/// 副等高线间距（米）＝主间距的 1/5（制图惯例「间曲线」），只在近档
+/// （Edit）出现，远观自动退场。
+pub const CONTOUR_SUB_M: f32 = 100.0;
+/// 主等高线屏幕基准宽（px，[`STROKE_PX`] 同口径亚线性缩放）。
+pub const CONTOUR_MAIN_PX: f32 = 1.1;
+/// 副等高线屏幕基准宽（px）。
+pub const CONTOUR_SUB_PX: f32 = 0.65;
+/// 副等高线墨水 alpha 乘子：副线 = 基准 alpha × 此值——细而淡，辅助读坡
+/// 不抢主墨线（等高线在晕渲之上永远可读即可，不做「明暗取反」v1）。
+pub const CONTOUR_SUB_ALPHA: f32 = 0.45;
+/// 副级表上限（条）：高度域 −4000..6000 内 100 m 间隔至多 60 条，防御
+/// 极端数据把级表撑爆。
+pub const CONTOUR_SUB_MAX_LEVELS: usize = 60;
+
+/// 副等高线级表（ADR-0102）：`SUB_M` 步进到 `max_land_m`，跳过主间距
+/// 倍数（500 的倍数由主线承担，避免双线）。整数运算免 f32 取模误差。
+pub fn contour_sub_levels(max_land_m: i32) -> Vec<f32> {
+    let step = CONTOUR_SUB_M as i32;
+    let main = CONTOUR_MAIN_M as i32;
+    (step..=max_land_m)
+        .step_by(step as usize)
+        .filter(|m| m % main != 0)
+        .map(|m| m as f32)
+        .take(CONTOUR_SUB_MAX_LEVELS)
+        .collect()
+}
 
 /// 海岸线水彩外晕（手绘地图 #4，2026-10-15）：
 /// 内晕 = 主线 `thin_half × HALO_1_MULT`、外晕 = `thin_half × HALO_2_MULT`。
@@ -93,6 +126,9 @@ pub struct IsolineKey {
     pub tol_bucket: i32,
     /// Nation 档（`view.scale >= LOD_NATION_SCALE`）：只画海岸线、不画类型边界。
     pub nation: bool,
+    /// 副等高线（100 m）是否在场（ADR-0102）：Region→Edit 跨档改变副线
+    /// 的**绘制**，须让网格键失配重建（链缓存不受影响——两级链都常驻）。
+    pub contour_sub: bool,
 }
 
 /// 地形内容指纹（仅进程内缓存比较用，不落盘、不跨进程）：FNV-1a 扫
@@ -145,6 +181,12 @@ pub struct CachedChains {
     pub inputs: ChainCacheInputs,
     pub coast_smoothed: Vec<IsolineChain>,
     pub kinds_smoothed: Vec<IsolineChain>,
+    /// 高程等高线主链（500 m，ADR-0102）——Nation 档恒空（不提取）。
+    pub elev_main_smoothed: Vec<IsolineChain>,
+    /// 高程等高线副链（100 m 级表，ADR-0102）——单遍多级提取
+    /// （`multi_level_segments`），Nation 档恒空；Region/Edit 都缓存
+    /// （绘制按档门，提取不重跑）。
+    pub elev_sub_smoothed: Vec<IsolineChain>,
 }
 
 /// 资源：等值线叠加实体 + 上次构建的键。
@@ -161,6 +203,9 @@ pub struct IsolineOverlay {
     /// 河水中线（手绘地图 #8，2026-10-15）：海岸链上方一道窄青蓝线（`label_water`
     /// 颜色）——civ-atlas 风格的"水边反光"。宽度 0.5× main，alpha 0.5。仅海岸。
     pub coast_river: Option<(Entity, Handle<Mesh>, Handle<ColorMaterial>)>,
+    /// 副等高线（100 m，ADR-0102）：独立 mesh + 材质（alpha = 基准 ×
+    /// [`CONTOUR_SUB_ALPHA`]，与主墨线分层）。只在 Edit 档在场。
+    pub contour_sub: Option<(Entity, Handle<Mesh>, Handle<ColorMaterial>)>,
     pub key: Option<IsolineKey>,
     /// 最近一次构建时的地形内容指纹（[`terrain_data_hash`]）：辨认「脏区待消费
     /// 但地形内容没变」（纯换色）用，见 `sync_isoline_overlay` 的快路径。
@@ -184,6 +229,7 @@ impl IsolineOverlay {
             self.halo_outer.take(),
             self.halo_outer_outer.take(),
             self.coast_river.take(),
+            self.contour_sub.take(),
         ]
         .into_iter()
         .flatten()
@@ -287,30 +333,57 @@ pub fn apply_material_colors(
             mat.color = pal.label_water.with_alpha(RIVER_ALPHA * opacity);
         }
     }
+    if let Some((_, _, handle)) = &overlay.contour_sub {
+        if let Some(mut mat) = materials.get_mut(handle) {
+            mat.color = ink.with_alpha(ISOLINE_BASE_ALPHA * CONTOUR_SUB_ALPHA * opacity);
+        }
+    }
 }
 
 /// 一条描边：点列 + 闭合位 + 世界半宽。
 type IsolineStroke = (Vec<wv_terrain::isoline::Pt>, bool, f32);
+
+/// [`assemble_strokes`] 的五路返回：主线 / 水彩内晕 / 水彩外晕 / 河中线 /
+/// 副等高线（ADR-0102）。
+pub type StrokeBundle = (
+    Vec<IsolineStroke>,
+    Vec<IsolineStroke>,
+    Vec<IsolineStroke>,
+    Vec<IsolineStroke>,
+    Vec<IsolineStroke>,
+);
 
 /// 从缓存链装配四路描边：主线 / 水彩内晕 / 水彩外晕 / 河中线。
 ///
 /// 入参是 **Chaikin 之后** 的链；本函数只跑 DP + 半宽赋值（缩放热路径）。
 /// 两段水彩晕分开返回（计划 Interfaces 写的是单路 `coast_halo`，但既有渲染
 /// 是 2.6× / 5.0× 两层 alpha 渐变，合并会改变观感——见 ledger Ruling）。
+///
+/// 高程等高线（ADR-0102）：主链（500 m）并入主线（主墨线同色）；副链
+/// （100 m）单独返回——调用方以独立材质（淡 alpha）成 mesh，与主线分层。
+/// `contours.want_sub` = Edit 档门：false 时副链不消耗（Region/远观）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ContourParams {
+    /// 主等高线世界半宽（px 基准 [`CONTOUR_MAIN_PX`] 经亚线性换算）。
+    pub main_half: f32,
+    /// 副等高线世界半宽（[`CONTOUR_SUB_PX`] 同口径）。
+    pub sub_half: f32,
+    /// 副等高线在场门（Edit 档 = true）。
+    pub want_sub: bool,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn assemble_strokes(
     coast: &[IsolineChain],
     kinds: &[IsolineChain],
+    elev_main: &[IsolineChain],
+    elev_sub: &[IsolineChain],
     tol: f32,
     thin_half: f32,
     kind_half: f32,
+    contours: ContourParams,
     treatment: TreatmentFlags,
-) -> (
-    Vec<IsolineStroke>,
-    Vec<IsolineStroke>,
-    Vec<IsolineStroke>,
-    Vec<IsolineStroke>,
-) {
+) -> StrokeBundle {
     let mut strokes: Vec<IsolineStroke> = Vec::new();
     let mut halo_inner: Vec<IsolineStroke> = Vec::new();
     let mut halo_outer: Vec<IsolineStroke> = Vec::new();
@@ -335,7 +408,24 @@ pub fn assemble_strokes(
             strokes.push((thin, *closed, kind_half));
         }
     }
-    (strokes, halo_inner, halo_outer, river)
+    // 主等高线（500 m）：与主墨线同色同层（主线 mesh），宽度略细于类型边界。
+    for (pts, closed) in elev_main {
+        let thin = simplify_dp(pts, *closed, tol);
+        if thin.len() >= 2 {
+            strokes.push((thin, *closed, contours.main_half));
+        }
+    }
+    // 副等高线（100 m 级表）：独立返回，调用方给淡 alpha 材质。
+    let mut sub: Vec<IsolineStroke> = Vec::new();
+    if contours.want_sub {
+        for (pts, closed) in elev_sub {
+            let thin = simplify_dp(pts, *closed, tol);
+            if thin.len() >= 2 {
+                sub.push((thin, *closed, contours.sub_half));
+            }
+        }
+    }
+    (strokes, halo_inner, halo_outer, river, sub)
 }
 
 /// 把折线链展开成**单个**三角网（每段一个加宽四边形，段端外扩半宽盖住转角缝隙）。
@@ -432,6 +522,7 @@ mod tests {
     fn isoline_key_distinguishes_nation_tier() {
         let base = IsolineKey {
             nation: false,
+            contour_sub: false,
             tol_bucket: -2,
             map: Some(wv_core::Id::new("m").expect("合法 id")),
             size: 512,
@@ -526,12 +617,82 @@ mod tests {
     #[test]
     fn assemble_strokes_from_cached_chains_yields_main_halo_and_river() {
         let coast = vec![(vec![p(0.5, 0.5), p(8.5, 0.5)], false)];
-        let (strokes, halo_inner, halo_outer, river) =
-            assemble_strokes(&coast, &[], 0.125, 0.5, 1.0, TreatmentFlags::HAND_DRAWN);
+        let (strokes, halo_inner, halo_outer, river, sub) = assemble_strokes(
+            &coast,
+            &[],
+            &[],
+            &[],
+            0.125,
+            0.5,
+            1.0,
+            ContourParams {
+                main_half: 0.4,
+                sub_half: 0.3,
+                want_sub: true,
+            },
+            TreatmentFlags::HAND_DRAWN,
+        );
         assert_eq!(strokes.len(), 1, "一条海岸链 = 一条主线");
         assert_eq!(halo_inner.len(), 1, "coast_halo 全开 → 内晕每链一");
         assert_eq!(halo_outer.len(), 1, "coast_halo 全开 → 外晕每链一");
         assert_eq!(river.len(), 1, "river_centerline 全开 → 每链一河中线");
+        assert_eq!(sub.len(), 0, "副链为空 → 副等高线无输出");
+    }
+
+    /// 高程等高线装配（ADR-0102）：主链并主线（同宽 `main_half`）、副链
+    /// 只在 `want_sub` 时产出；门关时副链不被 DP 消耗。
+    #[test]
+    fn assemble_strokes_routes_elevation_contours_main_and_gated_sub() {
+        let main = vec![(vec![p(0.5, 2.5), p(8.5, 2.5)], false)];
+        let sub = vec![(vec![p(0.5, 4.5), p(8.5, 4.5)], false)];
+        let contours = |want_sub| ContourParams {
+            main_half: 0.4,
+            sub_half: 0.3,
+            want_sub,
+        };
+        let (strokes, _, _, _, sub_out) = assemble_strokes(
+            &[],
+            &[],
+            &main,
+            &sub,
+            0.125,
+            0.5,
+            1.0,
+            contours(true),
+            TreatmentFlags::HAND_DRAWN,
+        );
+        assert_eq!(strokes.len(), 1, "主等高线并入主线");
+        assert_eq!(strokes[0].2, 0.4, "主等高线宽 = main_half");
+        assert_eq!(sub_out.len(), 1, "want_sub → 副线产出");
+        assert_eq!(sub_out[0].2, 0.3, "副等高线宽 = sub_half");
+        let (strokes2, _, _, _, sub_out2) = assemble_strokes(
+            &[],
+            &[],
+            &main,
+            &sub,
+            0.125,
+            0.5,
+            1.0,
+            contours(false),
+            TreatmentFlags::HAND_DRAWN,
+        );
+        assert_eq!(strokes2.len(), 1, "主等高线与档位门无关（Region 也在）");
+        assert_eq!(sub_out2.len(), 0, "门关 → 副线不产出");
+    }
+
+    /// 副级表（ADR-0102）：100 m 步进、跳过 500 倍数、上限截断。
+    #[test]
+    fn contour_sub_levels_step_by_100_skip_main_multiples() {
+        let levels = contour_sub_levels(1234);
+        assert_eq!(levels.len(), 10, "1234 m 内非 500 倍数的百米级 = 10 条");
+        assert_eq!(levels[0], 100.0);
+        assert_eq!(levels[3], 400.0);
+        assert_eq!(levels[4], 600.0, "500 由主线承担，副表跳过");
+        assert_eq!(*levels.last().unwrap(), 1200.0);
+        // 上限防御：6000 m 域 → 60 条封顶（不含 500 倍数应为 48，但级表
+        // 上限 60 只在更极端跨度生效，这里只验证 clamp 语义）。
+        assert!(contour_sub_levels(999_999).len() <= CONTOUR_SUB_MAX_LEVELS);
+        assert_eq!(contour_sub_levels(0), Vec::<f32>::new(), "无陆地无级");
     }
 
     /// 全退化链（空表 / 单点链）→ 无 mesh：渲染层不得插 0 顶点网格
@@ -600,6 +761,7 @@ mod tests {
             soften: false,
             tol_bucket: -2,
             nation: false,
+            contour_sub: false,
         };
         let same = base.clone();
         assert_eq!(base, same);
@@ -617,6 +779,7 @@ mod tests {
                 soften: false,
                 treatment: base.treatment,
                 nation: false,
+                contour_sub: false,
                 tol_bucket: -2,
             },
             IsolineKey {
@@ -627,6 +790,7 @@ mod tests {
                 soften: false,
                 treatment: base.treatment,
                 nation: false,
+                contour_sub: false,
                 tol_bucket: -2,
             },
             IsolineKey {
@@ -637,6 +801,7 @@ mod tests {
                 soften: false,
                 treatment: base.treatment,
                 nation: false,
+                contour_sub: false,
                 tol_bucket: -2,
             },
             IsolineKey {
@@ -647,6 +812,7 @@ mod tests {
                 soften: true,
                 treatment: base.treatment,
                 nation: false,
+                contour_sub: false,
                 tol_bucket: -2,
             },
             IsolineKey {
@@ -657,6 +823,7 @@ mod tests {
                 soften: false,
                 treatment: base.treatment,
                 nation: false,
+                contour_sub: false,
                 tol_bucket: -3,
             },
             IsolineKey {
@@ -667,6 +834,7 @@ mod tests {
                 soften: false,
                 treatment: [false, true, true],
                 nation: false,
+                contour_sub: false,
                 tol_bucket: -2,
             },
         ];
@@ -692,6 +860,7 @@ mod tests {
             soften: false,
             treatment: [t.coast_halo, t.river_centerline, t.ink_sublinear],
             nation: false,
+            contour_sub: false,
             tol_bucket: -2,
         };
         assert_eq!(

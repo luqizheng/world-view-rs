@@ -146,6 +146,8 @@ const SHADE_CHROMA_BOOST: f32 = 0.12;
 /// 固定海水基色（**sRGB 口径** `#2A5D8F`）= `shading::WATER_SRGB`。使用处
 /// 必须过 [`srgb_to_linear`]——浅滩 / 深海色带由此派生，不再读 `p.theme[0]`。
 const WATER_SRGB: vec3<f32> = vec3<f32>(0.1647059, 0.3647059, 0.5607843);
+/// 内陆湖色向色带偏移强度 = `shading::LAKE_TINT_RAMP`（ADR-0102，镜像）。
+const LAKE_TINT_RAMP: f32 = 0.35;
 
 /// T28：水彩幅度（±7% 明度）。< 0.05 看不出，> 0.12 破坏「色块可辨」。
 const WASH_AMT: f32 = 0.07;
@@ -497,6 +499,19 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // 2026-11-05 实机验收：0.18 在远观三层（滩+浅带+白滩）叠成「磨边
     // 光环」，减到 0.10。
     water_col = mix(water_col, p.paper.rgb, 0.10 * t_shore * (1.0 - t_shallow) * band_gate);
+
+    // ── 内陆湖色（ADR-0102）────────────────────────────────────────────
+    // 湖 = 水面 ∧ **本格存储高度 ≥ 海平面**。判别用 Nearest 取本格原值
+    // （平滑 `h` 在岸边会把陆格高度混进来，不能用作海/湖判别）；归一化域
+    // 的海平面锚 = [`SEA_LEVEL_NORM`]。湖色向该海拔的色带色偏
+    // [`LAKE_TINT_RAMP`]——高山湖取高阶冷调、低湖近水色，与周边陆地色带
+    // 衔接；海（存储高度 < 0）不偏。素底政治页 / CellFlat 数据视图不进
+    // （各自早退分支）；CPU 回退路径不跟进（ADR-0102 分叉登记）。
+    let cell_uv = clamp((floor(pos) + vec2<f32>(0.5)) / grid, vec2<f32>(0.0), vec2<f32>(1.0));
+    let h_cell_norm = textureSampleLevel(height_tex, height_smp, cell_uv, 0.0).r;
+    if (!is_land && h_cell_norm >= SEA_LEVEL_NORM) {
+        water_col = mix(water_col, elev_ramp_continuous(h), LAKE_TINT_RAMP);
+    }
 
     // 亚格混合：一格宽的软过渡替代逐格硬切。
     var rgb = mix(water_col, land_col, land_t);

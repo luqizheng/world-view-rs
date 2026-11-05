@@ -55,64 +55,122 @@ pub struct Chain {
 /// （= 四格共享的几何角点）的样本，把对偶格拆成四个三角形分别提取——
 /// 均值 ≥ `level` 时中心在内侧，对角「外侧」互不连通；反之对角「内侧」被隔断。
 pub fn height_segments(w: u32, h: u32, value_at: impl Fn(u32, u32) -> f32, level: f32) -> Vec<Seg> {
+    multi_level_segments(w, h, value_at, &[level])
+}
+
+/// 多级等值线：一次扫描提取**全部** `levels` 的等值线段（ADR-0102）。
+///
+/// 与「对每个 level 各调一次 [`height_segments`]」的段集合等价（级别内部
+/// 段序一致，级别之间交错），但对偶格只扫一遍、四角值只采样一次——
+/// 副等高线「每 100 m」这类密集级表（35 级 × 1024² 格）从 37 次 O(N)
+/// 降到 1 次 O(N + 交点数)。中位坡度 5.7 m/格的 demo 上，落在四角
+/// min..max 之间的级平均不到 0.1 个，绝大多数对偶格直接跳过。
+///
+/// `levels` 须**严格升序**（内部用二分窗口定位落在 `[min, max]` 值域内
+/// 的级）；乱序会漏段（debug_assert 兜底）。级与 [`height_segments`]
+/// 的 `level` 同语义：`inside = 值 >= level`，故 level 严格大于四角
+/// 最小值才可能穿越（`level == min` 时四角全在内侧，无段）。
+pub fn multi_level_segments(
+    w: u32,
+    h: u32,
+    value_at: impl Fn(u32, u32) -> f32,
+    levels: &[f32],
+) -> Vec<Seg> {
     let mut out = Vec::new();
-    if w == 0 || h == 0 {
+    if w == 0 || h == 0 || levels.is_empty() {
         return out;
     }
+    debug_assert!(
+        levels.windows(2).all(|pair| pair[0] < pair[1]),
+        "levels 须严格升序"
+    );
     // 越界防御性钳制：正常调用不会越界，但闭包是外部给的，兜底不 panic。
     let v = |x: u32, y: u32| value_at(x.min(w - 1), y.min(h - 1));
     for dy in 0..h - 1 {
         for dx in 0..w - 1 {
             let (v0, v1, v2, v3) = (v(dx, dy), v(dx + 1, dy), v(dx + 1, dy + 1), v(dx, dy + 1));
+            let lo = v0.min(v1).min(v2).min(v3);
+            let hi = v0.max(v1).max(v2).max(v3);
+            if lo == hi {
+                continue; // 平地对偶格：任何级都不穿过
+            }
+            // 落在 (lo, hi] 的级窗口（见函数文档的穿越定义）。
+            let start = levels.partition_point(|&l| l <= lo);
+            let end = levels.partition_point(|&l| l <= hi);
+            if start >= end {
+                continue;
+            }
             // 四格心 = 对偶格四角：p0 左上、p1 右上、p2 右下、p3 左下（y 向下）。
             let p0 = pt(dx as f32 + 0.5, dy as f32 + 0.5);
             let p1 = pt(dx as f32 + 1.5, dy as f32 + 0.5);
             let p2 = pt(dx as f32 + 1.5, dy as f32 + 1.5);
             let p3 = pt(dx as f32 + 0.5, dy as f32 + 1.5);
-            let inside = |x: f32| x >= level;
-            // 位序与角序一致：bit0..3 = c0..c3。
-            let case = inside(v0) as u8
-                | (inside(v1) as u8) << 1
-                | (inside(v2) as u8) << 2
-                | (inside(v3) as u8) << 3;
-            // 边交点：0 = 顶(c0-c1)、1 = 右(c1-c2)、2 = 底(c3-c2)、3 = 左(c0-c3)。
-            let edge = |e: u8| -> Pt {
-                match e {
-                    0 => lerp_pt(p0, v0, p1, v1, level),
-                    1 => lerp_pt(p1, v1, p2, v2, level),
-                    2 => lerp_pt(p3, v3, p2, v2, level),
-                    _ => lerp_pt(p0, v0, p3, v3, level),
-                }
-            };
-            match case {
-                0 | 15 => {}
-                // 鞍点（Q6）：角点仲裁后按四个三角形提取。
-                5 | 10 => {
-                    let m = (v0 + v1 + v2 + v3) * 0.25;
-                    let c = sample(pt(dx as f32 + 1.0, dy as f32 + 1.0), m);
-                    let (s0, s1, s2, s3) = (
-                        sample(p0, v0),
-                        sample(p1, v1),
-                        sample(p2, v2),
-                        sample(p3, v3),
-                    );
-                    tri_seg(s0, s1, c, level, &mut out);
-                    tri_seg(s1, s2, c, level, &mut out);
-                    tri_seg(s2, s3, c, level, &mut out);
-                    tri_seg(s3, s0, c, level, &mut out);
-                }
-                // 常规 14 案例的边配对表（查表免分支漂移；方向不重要）。
-                1 | 14 => out.push([edge(3), edge(0)]),
-                2 | 13 => out.push([edge(0), edge(1)]),
-                3 | 12 => out.push([edge(3), edge(1)]),
-                4 | 11 => out.push([edge(1), edge(2)]),
-                6 | 9 => out.push([edge(0), edge(2)]),
-                7 | 8 => out.push([edge(3), edge(2)]),
-                _ => unreachable!("case 由 4 bit 组成，必在 0..16"),
+            for &level in &levels[start..end] {
+                emit_dual_cell(v0, v1, v2, v3, p0, p1, p2, p3, dx, dy, level, &mut out);
             }
         }
     }
     out
+}
+
+/// 单个对偶格在单一 `level` 下的 marching-squares 提取（[`height_segments`]
+/// 与 [`multi_level_segments`] 的共用内核）。
+#[allow(clippy::too_many_arguments)]
+fn emit_dual_cell(
+    v0: f32,
+    v1: f32,
+    v2: f32,
+    v3: f32,
+    p0: Pt,
+    p1: Pt,
+    p2: Pt,
+    p3: Pt,
+    dx: u32,
+    dy: u32,
+    level: f32,
+    out: &mut Vec<Seg>,
+) {
+    let inside = |x: f32| x >= level;
+    // 位序与角序一致：bit0..3 = c0..c3。
+    let case = inside(v0) as u8
+        | (inside(v1) as u8) << 1
+        | (inside(v2) as u8) << 2
+        | (inside(v3) as u8) << 3;
+    // 边交点：0 = 顶(c0-c1)、1 = 右(c1-c2)、2 = 底(c3-c2)、3 = 左(c0-c3)。
+    let edge = |e: u8| -> Pt {
+        match e {
+            0 => lerp_pt(p0, v0, p1, v1, level),
+            1 => lerp_pt(p1, v1, p2, v2, level),
+            2 => lerp_pt(p3, v3, p2, v2, level),
+            _ => lerp_pt(p0, v0, p3, v3, level),
+        }
+    };
+    match case {
+        0 | 15 => {}
+        // 鞍点（Q6）：角点仲裁后按四个三角形提取。
+        5 | 10 => {
+            let m = (v0 + v1 + v2 + v3) * 0.25;
+            let c = sample(pt(dx as f32 + 1.0, dy as f32 + 1.0), m);
+            let (s0, s1, s2, s3) = (
+                sample(p0, v0),
+                sample(p1, v1),
+                sample(p2, v2),
+                sample(p3, v3),
+            );
+            tri_seg(s0, s1, c, level, out);
+            tri_seg(s1, s2, c, level, out);
+            tri_seg(s2, s3, c, level, out);
+            tri_seg(s3, s0, c, level, out);
+        }
+        // 常规 14 案例的边配对表（查表免分支漂移；方向不重要）。
+        1 | 14 => out.push([edge(3), edge(0)]),
+        2 | 13 => out.push([edge(0), edge(1)]),
+        3 | 12 => out.push([edge(3), edge(1)]),
+        4 | 11 => out.push([edge(1), edge(2)]),
+        6 | 9 => out.push([edge(0), edge(2)]),
+        7 | 8 => out.push([edge(3), edge(2)]),
+        _ => unreachable!("case 由 4 bit 组成，必在 0..16"),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -424,6 +482,66 @@ mod tests {
     fn field(w: u32, h: u32, f: impl Fn(u32, u32) -> f32) -> impl Fn(u32, u32) -> f32 {
         let cells: Vec<f32> = (0..w * h).map(|i| f(i % w, i / w)).collect();
         move |x, y| cells[(y * w + x) as usize]
+    }
+
+    /// 规范化一条段（端点按位模式排序），供集合比较——多级与逐级的段序
+    /// 在级别之间交错，比较必须无序。
+    fn canon(segs: &[Seg]) -> Vec<[u64; 2]> {
+        let key = |p: &Pt| ((p.x.to_bits()) as u64) << 32 | (p.y.to_bits() as u64);
+        let mut out: Vec<[u64; 2]> = segs
+            .iter()
+            .map(|s| {
+                let (a, b) = (key(&s[0]), key(&s[1]));
+                if a <= b {
+                    [a, b]
+                } else {
+                    [b, a]
+                }
+            })
+            .collect();
+        out.sort_unstable();
+        out
+    }
+
+    /// 多级提取 ≡ 逐级调用（ADR-0102 重构的等价性锚点）：含鞍点的伪随机
+    /// 场上，`multi_level_segments(levels)` 的段集合与对每级各调
+    /// `height_segments` 的并集逐段相等（端点位级一致）。
+    #[test]
+    fn multi_level_segments_match_per_level_height_segments() {
+        // LCG 伪随机高度（含鞍点机率足够大的连续场）。
+        let f = field(9, 7, |x, y| {
+            let s = (x as u64)
+                .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                .wrapping_add((y as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9));
+            ((s >> 33) % 400) as f32
+        });
+        let levels: Vec<f32> = (0..=8).map(|k| k as f32 * 50.0).collect();
+        let multi = canon(&multi_level_segments(9, 7, &f, &levels));
+        let mut per_level: Vec<Seg> = Vec::new();
+        for &l in &levels {
+            per_level.extend(height_segments(9, 7, &f, l));
+        }
+        assert_eq!(multi, canon(&per_level), "多级与逐级段集合应逐位相等");
+        // 场确实穿越了多级（否则等价性平凡成立）。
+        assert!(!multi.is_empty(), "fixture 应产出等值线段");
+    }
+
+    /// 穿越窗口 = (min, max]：level 恰等于四角最小值时四角全在内侧，
+    /// 不产出段（[`height_segments`] 语义的窗口边界锚点）。
+    #[test]
+    fn multi_level_window_is_left_open_at_the_minimum_corner() {
+        // 单个对偶格（2×2 格）：四角 = {10, 0, 0, 0}。
+        let f = field(2, 2, |x, y| if (x, y) == (0, 0) { 10.0 } else { 0.0 });
+        // level=0 在窗口外（0 <= min），无段；level=10 恰在 max 上，穿越 → 有段。
+        assert!(multi_level_segments(2, 2, &f, &[0.0]).is_empty());
+        assert!(!multi_level_segments(2, 2, &f, &[10.0]).is_empty());
+    }
+
+    /// 全平场：无任何级产出段（早退路径）。
+    #[test]
+    fn multi_level_segments_on_a_flat_field_is_empty() {
+        let f = field(4, 4, |_, _| 7.0);
+        assert!(multi_level_segments(4, 4, f, &[1.0, 2.0, 3.0]).is_empty());
     }
 
     fn kinds(w: u32, h: u32, f: impl Fn(u32, u32) -> u8) -> impl Fn(u32, u32) -> u8 {
