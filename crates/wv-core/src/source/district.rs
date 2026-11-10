@@ -259,10 +259,10 @@ pub fn generate_buildings(
 
     let mut state = seed ^ 0x632B_E596_1A62_3D1D;
     // 肌理：格边长在参数带内各轴独立抽一次——整区统一（城市肌理的一致性）。
-    let cell_w = params.block_min_m
-        + (params.block_max_m - params.block_min_m) * next_unit(&mut state);
-    let cell_h = params.block_min_m
-        + (params.block_max_m - params.block_min_m) * next_unit(&mut state);
+    let cell_w =
+        params.block_min_m + (params.block_max_m - params.block_min_m) * next_unit(&mut state);
+    let cell_h =
+        params.block_min_m + (params.block_max_m - params.block_min_m) * next_unit(&mut state);
     if cell_w <= 0.0 || cell_h <= 0.0 {
         return Vec::new();
     }
@@ -307,7 +307,11 @@ pub fn generate_buildings(
             let height = params.height_min_m
                 + (params.height_max_m - params.height_min_m) * next_unit(&mut state);
             // 长轴对齐最近街段（沿街对齐）；无街 / 未命中 → 长边朝 x。
-            let mut angle = if w >= d { 0.0 } else { std::f32::consts::FRAC_PI_2 };
+            let mut angle = if w >= d {
+                0.0
+            } else {
+                std::f32::consts::FRAC_PI_2
+            };
             if !streets.is_empty() {
                 if let Some(a) = nearest_street_angle(px, py, streets, street_radius) {
                     // 建筑长轴贴街向。保证 w 是长边。
@@ -475,7 +479,11 @@ mod tests {
             ..DistrictParams::default()
         };
         let out = generate_buildings(&ring, &full, 9, &[]);
-        assert!(out.len() > 20, "满密度 300² 区应长出大量建筑，得 {}", out.len());
+        assert!(
+            out.len() > 20,
+            "满密度 300² 区应长出大量建筑，得 {}",
+            out.len()
+        );
     }
 
     /// 规模守卫：极小 block + 大 ring → 栋数被 [`MAX_BUILDINGS_PER_DISTRICT`]
@@ -559,7 +567,11 @@ mod tests {
         assert_eq!(doc.upsert(d1.clone()), None, "首次插入无旧值");
         let mut d1b = d1.clone();
         d1b.seed = 2;
-        assert_eq!(doc.upsert(d1b.clone()).map(|d| d.seed), Some(1), "替换回旧值");
+        assert_eq!(
+            doc.upsert(d1b.clone()).map(|d| d.seed),
+            Some(1),
+            "替换回旧值"
+        );
         assert_eq!(doc.districts.len(), 1, "ID 对齐不追加");
         assert_eq!(doc.find(&crate::Id::new_unchecked("d1")).unwrap().seed, 2);
         assert_eq!(doc.remove(&crate::Id::new_unchecked("d1")).unwrap().seed, 2);

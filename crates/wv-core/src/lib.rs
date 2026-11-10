@@ -81,6 +81,7 @@ pub use model::faction_partition::partition_span_at;
 pub use model::place_territory::{place_territory_at, TerritoryShape};
 pub use model::region::{Region, RegionKind};
 pub use source::building::{Building, BuildingLayer};
+pub use source::district::{District, DistrictLayer, DistrictParams};
 pub use source::geographic_source::{GeographicSourceV1, LatLonBbox};
 pub use source::label::{label_visible_at, EntityKind, LabelLayerConfig, ZoomTier};
 pub use source::measurement::{Measurement, MeasurementKind, MeasurementOverlay};

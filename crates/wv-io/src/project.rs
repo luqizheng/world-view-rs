@@ -1206,7 +1206,13 @@ impl Project {
         // `city_blocks/<layer>` + 独立路由——重摇一笔只写街区与建筑文件，
         // 不触发 index.yaml / terrain.bin。
         if wants("city_blocks") || wants("maps") {
-            write_city_blocks_layers(&self.root, &world.maps, &world.city_blocks, dirty_paths, full)?;
+            write_city_blocks_layers(
+                &self.root,
+                &world.maps,
+                &world.city_blocks,
+                dirty_paths,
+                full,
+            )?;
         }
         // 测量：虚拟命名空间 `measurements/<map>`，独立路由（避免 `wants("maps")`
         // 把画一笔测量 → 重写 index.yaml / terrain.bin）。仅判 dirty 时写，
