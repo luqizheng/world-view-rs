@@ -329,6 +329,64 @@ fn write_buildings_layers(
     Ok(maps.to_vec())
 }
 
+/// 写**街区图层文档**到各 `Layer.source` 指向的 YAML（2026-11-06 城市街区
+/// 工具 D4）。与 [`write_buildings_layers`] 完全同构：虚拟脏命名空间
+/// `city_blocks/<layer_id>`（防 `maps/<map>/` 前缀把改街区误判成整图地形脏）。
+fn write_city_blocks_layers(
+    project_root: &Path,
+    maps: &[wv_core::map::MapNode],
+    city_blocks: &BTreeMap<wv_core::Id, wv_core::source::district::DistrictLayer>,
+    dirty_paths: &[String],
+    full: bool,
+) -> IoResult<Vec<wv_core::map::MapNode>> {
+    if city_blocks.is_empty() {
+        return Ok(maps.to_vec());
+    }
+    for (layer_id, doc) in city_blocks {
+        if !city_block_is_dirty(layer_id, dirty_paths, full) {
+            continue;
+        }
+        let owner = maps.iter().find_map(|m| {
+            m.layers
+                .iter()
+                .find(|l| l.id == *layer_id && l.kind == wv_core::map::LayerKind::District)
+                .and_then(|l| l.source.clone().map(|src| (m.id.clone(), src)))
+        });
+        let Some((_map_id, rel_path)) = owner else {
+            continue;
+        };
+        self::write_districts_at(project_root, &rel_path, doc)?;
+    }
+    Ok(maps.to_vec())
+}
+
+/// 这个街区图层这次落盘是否被触及。虚拟脏路径精确匹配 `city_blocks/<layer_id>`。
+fn city_block_is_dirty(layer_id: &wv_core::Id, dirty_paths: &[String], full: bool) -> bool {
+    if full {
+        return true;
+    }
+    let expected = format!("city_blocks/{}", layer_id.as_str());
+    dirty_paths.iter().any(|d| d == &expected)
+}
+
+/// [`Project::write_city_blocks`](Self::write_city_blocks) 的自由函数形态。
+fn write_districts_at(
+    project_root: &Path,
+    rel_path: &str,
+    doc: &wv_core::source::district::DistrictLayer,
+) -> IoResult<()> {
+    let path = project_root.join(rel_path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let text = serde_yaml::to_string(doc).map_err(|source| IoError::Yaml {
+        path: path.display().to_string(),
+        source,
+    })?;
+    crate::atomic::write_text(&path, &text)?;
+    Ok(())
+}
+
 /// 这个建筑图层这次落盘是否被触及。虚拟脏路径精确匹配 `buildings/<layer_id>`。
 fn building_is_dirty(layer_id: &wv_core::Id, dirty_paths: &[String], full: bool) -> bool {
     if full {
@@ -827,22 +885,6 @@ impl Project {
                             continue;
                         }
 
-                        // 建筑：ADR-0016 §6 落地项。失败语义分级与街道同款（V1）。
-                        let mut buildings: BTreeMap<wv_core::Id, wv_core::BuildingLayer> =
-                            BTreeMap::new();
-                        for m in &maps {
-                            for l in &m.layers {
-                                if l.kind == wv_core::map::LayerKind::Building {
-                                    if let Some(src) = l.source.as_deref() {
-                                        if !self.root.join(src).is_file() {
-                                            continue;
-                                        }
-                                        let doc = self.load_buildings(src)?;
-                                        buildings.insert(l.id.clone(), doc);
-                                    }
-                                }
-                            }
-                        }
                         let doc = self.load_streets(src)?;
                         streets.insert(l.id.clone(), doc);
                     }
@@ -888,6 +930,38 @@ impl Project {
         let seas: Vec<wv_core::map::sea::Sea> = load_dir(&self.root, "seas").unwrap_or_default();
         let regions: Vec<wv_core::Region> = load_dir(&self.root, "regions")?;
 
+        // 建筑 / 街区图层文档（ADR-0016 §6 + 2026-11-06 城市街区工具 D4）。
+        // ⚠️ 修复记录：旧实现把这段扫描嵌在 `LayerKind::Road` 分支内、
+        // initializer 又写死 `BTreeMap::new()`——局部变量被丢弃，建筑文档
+        // **从未**经 load_world 进过 World（保存侧 write_buildings_layers
+        // 因此也恒空）。现提到与 streets 同级并接通 initializer；街区同款。
+        let mut buildings: BTreeMap<wv_core::Id, wv_core::BuildingLayer> = BTreeMap::new();
+        let mut city_blocks: BTreeMap<wv_core::Id, wv_core::source::district::DistrictLayer> =
+            BTreeMap::new();
+        for m in &maps {
+            for l in &m.layers {
+                let src = match (&l.kind, l.source.as_deref()) {
+                    (wv_core::map::LayerKind::Building, Some(src)) => Some(src),
+                    (wv_core::map::LayerKind::District, Some(src)) => Some(src),
+                    _ => None,
+                };
+                let Some(src) = src else { continue };
+                if !self.root.join(src).is_file() {
+                    continue;
+                }
+                match l.kind {
+                    wv_core::map::LayerKind::Building => {
+                        let doc = self.load_buildings(src)?;
+                        buildings.insert(l.id.clone(), doc);
+                    }
+                    _ => {
+                        let doc = self.load_city_blocks(src)?;
+                        city_blocks.insert(l.id.clone(), doc);
+                    }
+                }
+            }
+        }
+
         Ok(World {
             meta: Some(self.meta.clone()),
             maps,
@@ -910,7 +984,8 @@ impl Project {
             terrains,
             streets,
             measurements,
-            buildings: BTreeMap::new(),
+            buildings,
+            city_blocks,
         })
     }
 
@@ -1127,6 +1202,12 @@ impl Project {
         if wants("buildings") || wants("maps") {
             write_buildings_layers(&self.root, &world.maps, &world.buildings, dirty_paths, full)?;
         }
+        // 街区文档（2026-11-06 城市街区工具 D4）：与建筑同款虚拟命名空间
+        // `city_blocks/<layer>` + 独立路由——重摇一笔只写街区与建筑文件，
+        // 不触发 index.yaml / terrain.bin。
+        if wants("city_blocks") || wants("maps") {
+            write_city_blocks_layers(&self.root, &world.maps, &world.city_blocks, dirty_paths, full)?;
+        }
         // 测量：虚拟命名空间 `measurements/<map>`，独立路由（避免 `wants("maps")`
         // 把画一笔测量 → 重写 index.yaml / terrain.bin）。仅判 dirty 时写，
         // 空 overlay 走 `write_measurements_at` 内部的删除传播。
@@ -1206,6 +1287,40 @@ impl Project {
             path: path.display().to_string(),
             source,
         })
+    }
+
+    /// 读一份街区图层文件（[`Self::load_buildings`] 的街区镜像）。
+    pub fn load_city_blocks(
+        &self,
+        rel_path: &str,
+    ) -> IoResult<wv_core::source::district::DistrictLayer> {
+        let path = self.root.join(rel_path);
+        let text = std::fs::read_to_string(&path).map_err(|source| IoError::ReadFile {
+            path: path.display().to_string(),
+            source,
+        })?;
+        serde_yaml::from_str(&text).map_err(|source| IoError::Yaml {
+            path: path.display().to_string(),
+            source,
+        })
+    }
+
+    /// 写入一份街区图层文件（[`Self::load_city_blocks`] 的逆操作）。
+    pub fn write_city_blocks(
+        &self,
+        rel_path: &str,
+        doc: &wv_core::source::district::DistrictLayer,
+    ) -> IoResult<String> {
+        let path = self.root.join(rel_path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(&parent)?;
+        }
+        let text = serde_yaml::to_string(doc).map_err(|source| IoError::Yaml {
+            path: path.display().to_string(),
+            source,
+        })?;
+        crate::atomic::write_text(&path, &text)?;
+        Ok(rel_path.to_string())
     }
 
     /// 写入一份建筑图层文件（[`Self::load_buildings`] 的逆操作）。

@@ -95,6 +95,7 @@ pub mod region_outline;
 pub mod selection;
 #[cfg(feature = "app")]
 pub mod state;
+#[cfg(feature = "app")]
 pub use state::{LOD_FALLBACK_FIT, LOD_NATION_RATIO, LOD_REGION_RATIO};
 #[cfg(feature = "app")]
 pub mod streets;
