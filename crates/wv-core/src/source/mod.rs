@@ -8,6 +8,7 @@
 //! - [`overture_id`]：Overture Maps 的 ID 类型（ADR-0007）
 //! - [`geographic_source`]：外部地理数据源（V1 协议）
 //! - [`measurement`]：地图测量叠加（工具产物，每图一份 YAML）
+//! - [`district`]：街区图层文档（城市街区工具，2026-11-06 设计）
 //!
 //! ## 边界（不做什么）
 //! - **不**含 Overture 拉取逻辑（`wv-overture` crate 负责）
@@ -19,6 +20,7 @@
 //! - [`measurement::MeasurementOverlay`]
 
 pub mod building;
+pub mod district;
 pub mod geographic_source;
 pub mod label;
 pub mod measurement;

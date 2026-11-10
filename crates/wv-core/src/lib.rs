@@ -306,6 +306,12 @@ pub struct World {
     /// ——磁盘真源是各 `Layer.source` 指向的 YAML 文件，`World` 只持有可改、
     /// 可撤销的工作副本（2026-10-11 裁定）。2.5D 建筑挤出的数据源。
     pub buildings: BTreeMap<Id, source::building::BuildingLayer>,
+
+    /// 街区图层运行副本（2026-11-06 城市街区工具设计 D4）：与
+    /// [`World::buildings`] 完全同构——`LayerKind::District` 图层经
+    /// `Layer.source` 指 YAML 文件，这里持可改可撤销的工作副本。
+    /// 街区 = 模拟城市式「框选长建筑」的参数留种区（D2），建筑为派生数据。
+    pub city_blocks: BTreeMap<Id, source::district::DistrictLayer>,
 }
 
 impl World {
@@ -402,6 +408,20 @@ impl World {
         doc: source::building::BuildingLayer,
     ) -> Option<source::building::BuildingLayer> {
         self.buildings.insert(layer, doc)
+    }
+
+    /// 取某个街区图层的文档（未加载则 `None`）。
+    pub fn city_block_of(&self, layer: &Id) -> Option<&source::district::DistrictLayer> {
+        self.city_blocks.get(layer)
+    }
+
+    /// 写入某个街区图层的文档，返回被替换掉的旧值（首次写入时为 `None`）。
+    pub fn set_city_blocks(
+        &mut self,
+        layer: Id,
+        doc: source::district::DistrictLayer,
+    ) -> Option<source::district::DistrictLayer> {
+        self.city_blocks.insert(layer, doc)
     }
     /// 取某张图的测量叠加（无测量时 `None`）。
     pub fn measurement_of(&self, map: &Id) -> Option<&source::measurement::MeasurementOverlay> {
