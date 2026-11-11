@@ -399,7 +399,11 @@ mod tests {
             Vec2::new(1280.0, 800.0),
             Vec2::splat(FALLBACK_MAP_SIZE),
         );
-        assert!((world.min - 5.12 / 8.0).abs() < 1e-4, "世界内界应 = fit/8，得 {}", world.min);
+        assert!(
+            (world.min - 5.12 / 8.0).abs() < 1e-4,
+            "世界内界应 = fit/8，得 {}",
+            world.min
+        );
         assert!((world.max - 8.0).abs() < 1e-4, "外界不受分档影响");
 
         let c = world_with(vec![map(
@@ -413,7 +417,11 @@ mod tests {
             Vec2::new(1280.0, 800.0),
             Vec2::splat(FALLBACK_MAP_SIZE),
         );
-        assert!((city.min - 1.28 / 32.0).abs() < 1e-5, "城市内界保持 fit/32，得 {}", city.min);
+        assert!(
+            (city.min - 1.28 / 32.0).abs() < 1e-5,
+            "城市内界保持 fit/32，得 {}",
+            city.min
+        );
     }
 
     #[test]

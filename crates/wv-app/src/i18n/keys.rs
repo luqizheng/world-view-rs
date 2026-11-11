@@ -537,6 +537,8 @@ pub enum I18nKey {
     PanelLayerRoad,
     /// 图层类型默认名：建筑
     PanelLayerBuilding,
+    /// 图层类型：街区（2026-11-06 城市街区工具 D4）
+    PanelLayerDistrict,
     /// 图层类型默认名：事件点
     PanelLayerEventPoint,
     /// 图层类型默认名：地点
@@ -828,6 +830,10 @@ pub enum I18nKey {
     PoiKindFortress,
     /// 类别：营地（ADR-0099）
     PoiKindCamp,
+    /// 类别：治安 / 警署（2026-11-06 城市街区工具 D6）
+    PoiKindPolice,
+    /// 类别：住宅（2026-11-06 城市街区工具 D6）
+    PoiKindHouse,
     /// CellMap 编辑 dialog 标题（ADR-0097）
     CellDlgTitle,
     /// 页签：群系（命名物化）
@@ -1697,7 +1703,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 723] = [
+    pub const ALL: [I18nKey; 726] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1963,6 +1969,7 @@ impl I18nKey {
         I18nKey::PanelLayerInfluence,
         I18nKey::PanelLayerRoad,
         I18nKey::PanelLayerBuilding,
+        I18nKey::PanelLayerDistrict,
         I18nKey::PanelLayerEventPoint,
         I18nKey::PanelLayerPlace,
         I18nKey::PanelLayerLabel,
@@ -2091,6 +2098,8 @@ impl I18nKey {
         I18nKey::PoiKindDanger,
         I18nKey::PoiKindFortress,
         I18nKey::PoiKindCamp,
+        I18nKey::PoiKindPolice,
+        I18nKey::PoiKindHouse,
         I18nKey::CellDlgTitle,
         I18nKey::CellDlgTabBiome,
         I18nKey::CellDlgTabPoi,

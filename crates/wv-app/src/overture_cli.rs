@@ -1120,6 +1120,8 @@ fn build_world(
 
     wv_core::World {
         partitions: Vec::new(),
+        // 街区图层（2026-11-06 城市街区工具 D4）：Overture 导入的工程无街区。
+        city_blocks: Default::default(),
         meta: Some(meta),
         maps,
         timeline: None,

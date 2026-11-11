@@ -12,6 +12,7 @@ use wv_render::brush_cursor;
 use wv_render::buildings;
 use wv_render::camera;
 use wv_render::cellmap_bridge;
+use wv_render::districts;
 use wv_render::faction_overlays;
 use wv_render::feature_overlays;
 use wv_render::layer_frame;
@@ -457,6 +458,12 @@ pub(super) fn register(app: &mut App) {
     app.add_systems(
         Update,
         buildings::sync_building_overlays.after(vector_layers::sync_vector_layers),
+    );
+    // 街区 overlay（2026-11-06 城市街区工具 D4）：描边 + 填充，与建筑同链
+    // 消费 LayerFrame（街区层的可见 / 透明 / z 偏移）。
+    app.add_systems(
+        Update,
+        districts::sync_district_overlays.after(vector_layers::sync_vector_layers),
     );
     app.add_systems(
         Update,
