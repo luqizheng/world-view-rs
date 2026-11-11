@@ -12,6 +12,7 @@ use wv_render::brush_cursor;
 use wv_render::buildings;
 use wv_render::camera;
 use wv_render::cellmap_bridge;
+use wv_render::districts;
 use wv_render::faction_overlays;
 use wv_render::feature_overlays;
 use wv_render::layer_frame;
@@ -458,6 +459,22 @@ pub(super) fn register(app: &mut App) {
         Update,
         buildings::sync_building_overlays.after(vector_layers::sync_vector_layers),
     );
+    // 街区 overlay（2026-11-06 城市街区工具 D4）：描边 + 填充，与建筑同链
+    // 消费 LayerFrame（街区层的可见 / 透明 / z 偏移）。
+    app.add_systems(
+        Update,
+        districts::sync_district_overlays.after(vector_layers::sync_vector_layers),
+    );
+    // 街区工具驱动（2026-11-06 D4）：把 `SelectionState` 拨到矩形成形模式 +
+    // 消费闭合轮廓开表单。排在 selection 的 commit 之后（要读 `closed`）。
+    app.add_systems(
+        Update,
+        crate::edit::district_tool::drive_and_sync_district_tool
+            .after(wv_render::selection::commit_selection_click)
+            .after(wv_render::selection::commit_selection_shape_drag),
+    );
+    // 街区表单窗（2026-11-06 D4）：上下文浮窗 + 「生成」提交。
+    app.add_systems(Update, crate::ui::district_form::district_form_window);
     app.add_systems(
         Update,
         (

@@ -202,12 +202,16 @@ pub enum PoiKind {
     /// 与 [`Self::Settlement`] 分开的理由同 [`Self::Fortress`]：营地在
     /// 世界地图上「会动」，是另一种语义的一等节点。
     Camp,
+    /// 治安 / 警署（2026-11-06 城市街区工具 D6）：城市内部语义 POI。
+    Police,
+    /// 住宅（2026-11-06 城市街区工具 D6）：主角的家 / 民居——剧情锚点。
+    House,
 }
 
 impl PoiKind {
     /// 全部类别（声明序）。渲染层的材质 / 批次表按 [`Self::index`] 索引，
     /// 新增类别只需在这里追加 + 给配色。
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 21] = [
         Self::Other,
         Self::Settlement,
         Self::Peak,
@@ -227,6 +231,8 @@ impl PoiKind {
         Self::Danger,
         Self::Fortress,
         Self::Camp,
+        Self::Police,
+        Self::House,
     ];
 
     /// 类别总数（= [`Self::ALL`] 长度，编译期一致）。
@@ -264,6 +270,8 @@ impl PoiKind {
             Self::Danger => "danger",
             Self::Fortress => "fortress",
             Self::Camp => "camp",
+            Self::Police => "police",
+            Self::House => "house",
         }
     }
 }
@@ -971,13 +979,15 @@ mod tests {
             PoiKind::Danger,
             PoiKind::Fortress,
             PoiKind::Camp,
+            PoiKind::Police,
+            PoiKind::House,
         ];
         for k in all {
             let yaml = serde_yaml::to_string(&k).expect("PoiKind 应可序列化");
             assert_eq!(yaml.trim(), k.key(), "{k:?} 的 serde 拼写与 key() 不一致");
         }
         assert_eq!(PoiKind::default(), PoiKind::Other, "缺省应为未分类");
-        assert_eq!(PoiKind::COUNT, 19);
+        assert_eq!(PoiKind::COUNT, 21);
         for (i, k) in PoiKind::ALL.iter().enumerate() {
             assert_eq!(k.index(), i, "{k:?} 的 index 应等于声明序");
         }

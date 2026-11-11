@@ -267,11 +267,12 @@ pub(crate) fn apply_pending_commands(
     // 会话态；地标放置会话态（ADR-0071）同粒度互斥——四者为单系统
     // 16 参数上限折进同层元组。（泛洪工具态已随 ADR-0086 退役：工具与
     // 点选默认点击重复；判据资源仍初始化，供默认点击读。）
-    (mut flash, mut point_select, mut line_poi, mut landmark): (
+    (mut flash, mut point_select, mut line_poi, mut landmark, mut district): (
         ResMut<wv_world_cell_map::cell_flash::CellFlashState>,
         ResMut<crate::state::PointSelectState>,
         ResMut<crate::state::LinePoiState>,
         ResMut<crate::state::LandmarkToolState>,
+        ResMut<crate::state::DistrictToolState>,
     ),
     current_loc: Res<CurrentLocale>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
@@ -452,6 +453,7 @@ pub(crate) fn apply_pending_commands(
                 &boundary,
                 &line_poi,
                 &landmark,
+                &district,
             );
 
             // 工作区白名单终审（2026-10-28 裁定⑤）：工具条灰化 / 快捷键拦截 /
@@ -491,6 +493,7 @@ pub(crate) fn apply_pending_commands(
                     &mut line_poi,
                     &mut panels,
                     &mut landmark,
+                    &mut district,
                 );
                 if !already_on {
                     open_map_tool(
@@ -505,6 +508,7 @@ pub(crate) fn apply_pending_commands(
                         &mut line_poi,
                         &mut panels,
                         &mut landmark,
+                        &mut district,
                         &playback,
                     );
                 }
@@ -527,6 +531,7 @@ pub(crate) fn apply_pending_commands(
                 &mut line_poi,
                 &mut panels,
                 &mut landmark,
+                &mut district,
             );
             open_map_tool(
                 &crate::ui_command_palette::MapToolId::PointSelect,
@@ -540,6 +545,7 @@ pub(crate) fn apply_pending_commands(
                 &mut line_poi,
                 &mut panels,
                 &mut landmark,
+                &mut district,
                 &playback,
             );
         }
@@ -695,6 +701,7 @@ fn map_tool_is_on(
     boundary: &wv_render::state::BiomeBoundaryState,
     line_poi: &crate::state::LinePoiState,
     landmark: &crate::state::LandmarkToolState,
+    district: &crate::state::DistrictToolState,
 ) -> bool {
     use crate::state::MeasureMode;
     use crate::ui_command_palette::MapToolId;
@@ -715,6 +722,8 @@ fn map_tool_is_on(
         // 河开着点路 = 换类不关工具（与 Select(shape) 换形状同口径）。
         MapToolId::LinePoi(kind) => line_poi.tool_active && line_poi.kind == kind,
         MapToolId::Landmark => landmark.placing,
+        // 街区框选（2026-11-06 D4）：「已开」= 工具激活。
+        MapToolId::District => district.active,
     }
 }
 
@@ -737,6 +746,7 @@ fn close_all_map_tools(
     line_poi: &mut crate::state::LinePoiState,
     panels: &mut PanelState,
     landmark: &mut crate::state::LandmarkToolState,
+    district: &mut crate::state::DistrictToolState,
 ) {
     use crate::state::MeasureMode;
     let had_selection = selection.enabled;
@@ -770,6 +780,10 @@ fn close_all_map_tools(
     panels.set_visible(crate::state::Panel::LinePoi, false);
     // 切走地标放置：纯开关，无草稿可清（ADR-0071）。
     landmark.placing = false;
+    // 切走街区框选（2026-11-06 D4）：关工具 + 清草稿轮廓；**已开表单不关**
+    // （表单是独立浮窗，作者正在调参数时切工具不该把表单吃掉）。
+    district.active = false;
+    district.pending_ring = None;
 }
 
 /// 按需打开目标地图工具（P1-2 拆解段 ③）。`already_on` 已由调用方保证 false。
@@ -791,6 +805,7 @@ fn open_map_tool(
     line_poi: &mut crate::state::LinePoiState,
     panels: &mut PanelState,
     landmark: &mut crate::state::LandmarkToolState,
+    district: &mut crate::state::DistrictToolState,
     playback: &crate::state::PlaybackState,
 ) {
     use crate::state::MeasureMode;
@@ -799,6 +814,11 @@ fn open_map_tool(
         MapToolId::Select(shape) => {
             selection.shape = shape;
             selection.enabled = true;
+        }
+        // 街区框选（2026-11-06 D4）：激活标记 + 把 selection 拨到矩形模式
+        // （手势由 `drive_and_sync_district_tool` 每帧驱动）。
+        MapToolId::District => {
+            district.active = true;
         }
         MapToolId::Pan => view.pan_tool = true,
         MapToolId::Brush => brush.enabled = true,

@@ -377,6 +377,10 @@ pub enum LayerKind {
     /// 建筑轮廓层（ADR-0016 §6 落地项）：`Layer.source` 指向
     /// [`crate::building::BuildingLayer`] YAML，供 2.5D 建筑挤出渲染。
     Building,
+    /// 街区层（2026-11-06 城市街区工具 D4）：`Layer.source` 指向
+    /// [`crate::district::DistrictLayer`] YAML——模拟城市式「框选长建筑」
+    /// 的参数留种区，派生建筑落 Building 层。
+    District,
     EventPoint,
     Place,
     /// 标签层（ADR-0017 · 2026-10-14 接受）。

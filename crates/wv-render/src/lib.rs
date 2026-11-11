@@ -46,6 +46,8 @@ pub mod buildings;
 pub mod camera;
 #[cfg(feature = "app")]
 pub mod cellmap_bridge;
+#[cfg(feature = "app")]
+pub mod districts;
 
 // ── CellMap 渲染域已迁 wv-world-cell-map（ADR-0054）；旧模块路径经 re-export 兼容 ──
 #[cfg(feature = "app")]
@@ -95,6 +97,7 @@ pub mod region_outline;
 pub mod selection;
 #[cfg(feature = "app")]
 pub mod state;
+#[cfg(feature = "app")]
 pub use state::{LOD_FALLBACK_FIT, LOD_NATION_RATIO, LOD_REGION_RATIO};
 #[cfg(feature = "app")]
 pub mod streets;

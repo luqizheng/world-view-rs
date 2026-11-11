@@ -33,6 +33,7 @@ pub use wv_world_cell_map::state::{FloodCriterion, FloodSelectState};
 /// 同款经 `wv_render::state` re-export 链暴露，应用侧 `crate::state::X` 直用。
 pub use wv_render::state::{CellSelection, PinDragState, PointSelectState};
 
+pub use crate::edit::district_tool::{DistrictForm, DistrictToolState};
 /// 线段 POI 工具会话态四件套（`LinePoiState` / `PendingLinePoi` /
 /// `EndpointDrag` / `DraggedEnd`，ADR-0070 D4）已随 [ADR-0090 M2] 下沉
 /// `wv_render::state`——drill_pick 的线命中（D2 Map 仲裁）要读工具激活态，

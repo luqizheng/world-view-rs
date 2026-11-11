@@ -29,6 +29,10 @@ pub fn glyph_of(kind: PoiKind) -> Option<&'static GlyphData> {
         PoiKind::Danger => "danger",
         PoiKind::Fortress => "tower-control",
         PoiKind::Camp => "tent-tree",
+        // 2026-11-06 城市街区工具 D6：治安 / 住宅。Lucide 表缺源时
+        // glyph() 回 None → 渲染侧白芯 pin 兜底（与未建图标轮新类别同款）。
+        PoiKind::Police => "siren",
+        PoiKind::House => "home",
     };
     glyph(name)
 }

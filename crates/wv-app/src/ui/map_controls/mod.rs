@@ -117,6 +117,8 @@ type ToolSessionStates<'w> = (
     Res<'w, crate::state::PointSelectState>,
     Res<'w, crate::state::PlaybackState>,
     Res<'w, crate::state::LinePoiState>,
+    // 街区工具会话态（2026-11-06 城市街区工具 D4）：活动态读它。
+    Res<'w, crate::state::DistrictToolState>,
 );
 
 /// 贴边距离（原型 `right: 18px`）。

@@ -241,6 +241,16 @@ pub enum MapToolId {
     /// dispatch 的互斥机制——激活时自动关闭选择 / 点选 / EditCell 等
     /// 一切左键消费者，反之进 CellMap 时也会被 EditCell 关掉。
     Landmark,
+    /// **街区框选**（2026-11-06 城市街区工具 D4）：在城市图上拖一个矩形，
+    /// 长出一片随机建筑（模拟城市 2000 的「选一块地长房子」）。
+    ///
+    /// **不进 `Select` 家族**：Select 的包络圈选白名单只在 Topographic，
+    /// 而城市图走 Browse/Map 段——本工具自带 `SelectionState` 矩形手势，
+    /// 但**复用**它的坐标链（闭合顶点 = 本图局部坐标 = `District.ring`）。
+    ///
+    /// 可用性终审在分发器（当前图 level == City）；`available_in` 放行
+    /// 三档模式——否则工具条永远灰着（白名单按 mode 看，不看图）。
+    District,
 }
 
 impl MapToolId {
@@ -279,6 +289,12 @@ impl MapToolId {
                 )
             }
             Self::LinePoi(_) => mode == ViewMode::GoogleMap,
+            // 街区框选：三档都放行——真正的门是「当前图是城市图」
+            //（分发器终审，白名单按 mode 看不了图）。
+            Self::District => matches!(
+                mode,
+                ViewMode::VectorFlat | ViewMode::GoogleMap | ViewMode::Topographic
+            ),
             Self::Brush
             | Self::BrushErase
             | Self::EditCell

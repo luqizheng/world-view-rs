@@ -280,6 +280,15 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::PanelLayerInfluence => "势力影响",
         I18nKey::PanelLayerRoad => "道路",
         I18nKey::PanelLayerBuilding => "建筑",
+        I18nKey::PanelLayerDistrict => "街区",
+        I18nKey::DistrictFormTitle => "街区",
+        I18nKey::DistrictFormDensity => "密度",
+        I18nKey::DistrictFormHeight => "楼层带（米）",
+        I18nKey::DistrictFormBlock => "街区肌理（米）",
+        I18nKey::DistrictFormSeed => "种子",
+        I18nKey::DistrictFormGenerate => "生成",
+        I18nKey::DistrictFormRegenerate => "重摇",
+        I18nKey::DistrictFormCancel => "取消",
         I18nKey::PanelLayerEventPoint => "事件点",
         I18nKey::PanelLayerPlace => "地点",
         I18nKey::PanelLayerLabel => "标签",
@@ -467,6 +476,8 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::PoiKindDanger => "险地",
         I18nKey::PoiKindFortress => "要塞",
         I18nKey::PoiKindCamp => "营地",
+        I18nKey::PoiKindPolice => "警署",
+        I18nKey::PoiKindHouse => "住宅",
         I18nKey::CellDlgTitle => "编辑选区",
         I18nKey::CellDlgTabBiome => "群系",
         I18nKey::CellDlgTabPoi => "POI",
@@ -547,6 +558,7 @@ pub(crate) fn lookup_zh(key: I18nKey) -> &'static str {
         I18nKey::MapControlsClearMeasurements => "清除全部测量（Del 删除光标下的一条）",
         I18nKey::MapControlsEditCellHint => "单格编辑：点选一格改高度 / 地表 / 群系；按住拖动可连续涂画",
         I18nKey::MapControlsPointSelectHint => "点选：点一格进选区查看属性；Shift 加选 / Alt 减选；不落笔",
+        I18nKey::MapControlsDistrictHint => "街区：城市图上拖一个矩形，圈一块地长出随机建筑",
         I18nKey::HypsometricTintLabel => "海拔分层",
         I18nKey::HypsometricTintHint => "海拔分层设色强度（0 = 只看群系色，1 = 只看海拔）",
         I18nKey::CellFloodBySurface => "按地表",
@@ -1172,6 +1184,15 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::PanelLayerInfluence => "Influence",
         I18nKey::PanelLayerRoad => "Roads",
         I18nKey::PanelLayerBuilding => "Buildings",
+        I18nKey::PanelLayerDistrict => "Districts",
+        I18nKey::DistrictFormTitle => "District",
+        I18nKey::DistrictFormDensity => "Density",
+        I18nKey::DistrictFormHeight => "Height range (m)",
+        I18nKey::DistrictFormBlock => "Block size (m)",
+        I18nKey::DistrictFormSeed => "Seed",
+        I18nKey::DistrictFormGenerate => "Generate",
+        I18nKey::DistrictFormRegenerate => "Regenerate",
+        I18nKey::DistrictFormCancel => "Cancel",
         I18nKey::PanelLayerEventPoint => "Event points",
         I18nKey::PanelLayerPlace => "Places",
         I18nKey::PanelLayerLabel => "Labels",
@@ -1361,6 +1382,8 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         I18nKey::PoiKindDanger => "Danger",
         I18nKey::PoiKindFortress => "Fortress",
         I18nKey::PoiKindCamp => "Camp",
+        I18nKey::PoiKindPolice => "Police",
+        I18nKey::PoiKindHouse => "House",
         I18nKey::CellDlgTitle => "Edit selection",
         I18nKey::CellDlgTabBiome => "Biome",
         I18nKey::CellDlgTabPoi => "POI",
@@ -1446,6 +1469,9 @@ pub(crate) fn lookup_en(key: I18nKey) -> &'static str {
         }
         I18nKey::MapControlsPointSelectHint => {
             "Point select: click cells into the selection to inspect; Shift adds / Alt subtracts; no painting"
+        }
+        I18nKey::MapControlsDistrictHint => {
+            "District: drag a rectangle on a city map to grow a block of random buildings"
         }
         I18nKey::HypsometricTintLabel => "Hypsometric",
         I18nKey::HypsometricTintHint => {

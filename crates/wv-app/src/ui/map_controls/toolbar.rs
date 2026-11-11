@@ -27,7 +27,7 @@ pub fn map_controls(
     //
     // **折成一层元组**：Bevy 单系统参数上限 16，本函数原有 15 个，五个
     // `Res` 分开写会到 20（编译报「not a system set」）。元组算 1 个参数。
-    (edit_cell, point_select, playback, line_poi): ToolSessionStates,
+    (edit_cell, point_select, playback, line_poi, district): ToolSessionStates,
 ) {
     // 无工程闸门（图片规格 §首页不可见）：与 `welcome_screen` 共用同一信号。
     // 2026-10-22（B 档）：改读 `AppScreen`——「首页不可见」的口径由屏状态
@@ -62,6 +62,13 @@ pub fn map_controls(
     // Resource，判据各读各的 `tool_active`——不再共用 `allow_drag` 形态位。
     let edit_cell_active = edit_cell.tool_active;
     let point_select_active = point_select.tool_active;
+    // 街区工具（2026-11-06 城市街区工具 D4）：活动态读会话资源；可用性 =
+    // **当前图是城市图**（`MapLevel::City`）——世界图上没有街区。
+    let district_active = district.active;
+    let district_ok = drill
+        .current_node(&projection.world)
+        .map(|n| n.level == wv_core::map::MapLevel::City)
+        .unwrap_or(false);
     // **Gate-1**（[ADR-0052] §9.4）：时间轴播放中，CellMap 写入口工具灰化。
     // 禁工具而非禁面板——播放中看读数条是合法只读操作。
     let cell_tools_enabled = !playback.playing;
@@ -177,6 +184,25 @@ pub fn map_controls(
                             cell_tools_enabled,
                             &mut params.palette,
                             MapToolId::PointSelect,
+                        );
+
+                        // ── 槽 1.5：街区框选（2026-11-06 D4）────────────
+                        // 「圈一块地长一片建筑」（模拟城市 2000）。仅**城市图**
+                        // 可用（世界图上没有街区）——门判据 = 当前图 level。
+                        tool_tile(
+                            ui,
+                            &shell,
+                            metrics,
+                            ICON_VECTOR_SQUARE,
+                            if district_ok {
+                                t(loc, I18nKey::MapControlsDistrictHint)
+                            } else {
+                                ws_hint
+                            },
+                            district_active,
+                            district_ok && cell_tools_enabled,
+                            &mut params.palette,
+                            MapToolId::District,
                         );
 
                         // ── 槽 2：抓手 ────────────────────────────────────

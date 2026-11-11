@@ -19,6 +19,7 @@ pub mod command;
 pub mod history;
 pub mod nature_region;
 
+pub use command::{ensure_district_layers, UpsertDistrictCommand};
 pub use command::{
     AddBuildingCommand, AddCharacterCommand, AddCityCommand, AddEventCommand, AddFactionCommand,
     AddMapCommand, AddMeasurementCommand, AddPlaceCommand, AddPlaceEdgeCommand, AddRegionCommand,

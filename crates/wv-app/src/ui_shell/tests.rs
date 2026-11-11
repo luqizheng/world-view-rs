@@ -174,6 +174,8 @@ fn dispatcher_world(project_dir: Option<&str>, dirty: bool, pending: CommandId) 
     world.init_resource::<crate::state::LinePoiState>();
     // ADR-0071：地标放置会话态——分发器 SelectMapTool(Landmark) 分支要写。
     world.init_resource::<crate::state::LandmarkToolState>();
+    // 街区工具会话态（2026-11-06 城市街区工具 D4）：dispatch 系统要读它。
+    world.init_resource::<crate::state::DistrictToolState>();
     world.resource_mut::<CommandPalette>().pending = Some(pending);
     world
 }
@@ -477,6 +479,8 @@ fn project_menu_pending_command_reaches_the_dispatcher() {
     // 分发器 SelectMapTool 两分支各写各的（漏 init 即 SystemParamValidationError）。
     world.init_resource::<crate::state::LinePoiState>();
     world.init_resource::<crate::state::LandmarkToolState>();
+    // 街区工具会话态（2026-11-06 城市街区工具 D4）：dispatch 系统要读它。
+    world.init_resource::<crate::state::DistrictToolState>();
     world.resource_mut::<ProjectMenuState>().pending = Some(CommandId::CloseProject);
 
     world

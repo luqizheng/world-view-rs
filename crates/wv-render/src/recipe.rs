@@ -457,6 +457,11 @@ mod tests {
                 opacity: 1.0,
                 z_offset: 0.0,
             },
+            district: LayerBinding {
+                visible: true,
+                opacity: 1.0,
+                z_offset: 0.0,
+            },
             influence: LayerBinding {
                 visible: true,
                 opacity: 1.0,

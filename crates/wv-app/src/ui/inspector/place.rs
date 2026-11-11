@@ -188,6 +188,9 @@ pub(crate) fn poi_kind_label_key(kind: PoiKind) -> crate::i18n::I18nKey {
         PoiKind::Portal => K::PoiKindPortal,
         PoiKind::Danger => K::PoiKindDanger,
         PoiKind::Fortress => K::PoiKindFortress,
+        // 2026-11-06 城市街区工具 D6：治安 / 住宅。
+        PoiKind::Police => K::PoiKindPolice,
+        PoiKind::House => K::PoiKindHouse,
         PoiKind::Camp => K::PoiKindCamp,
     }
 }

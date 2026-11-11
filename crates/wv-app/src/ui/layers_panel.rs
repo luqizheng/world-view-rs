@@ -621,6 +621,14 @@ fn layer_count(world: &World, map_id: &Id, layer: &Layer) -> Option<u32> {
                 .filter(|p| p.map.as_ref() == Some(map_id))
                 .count() as u32,
         ),
+        // 街区层（2026-11-06 D4）：数本图的街区数。
+        LayerKind::District => Some(
+            world
+                .city_blocks
+                .get(&layer.id)
+                .map(|doc| doc.districts.len() as u32)
+                .unwrap_or(0),
+        ),
         LayerKind::Road => {
             // 边不直接挂图，按「端点落在本图的 Place 集合」折算。
             let on_map: std::collections::HashSet<&Id> = world
@@ -669,6 +677,7 @@ fn kind_name(loc: Locale, kind: &LayerKind) -> &'static str {
         LayerKind::Influence => I18nKey::PanelLayerInfluence,
         LayerKind::Road => I18nKey::PanelLayerRoad,
         LayerKind::Building => I18nKey::PanelLayerBuilding,
+        LayerKind::District => I18nKey::PanelLayerDistrict,
         LayerKind::EventPoint => I18nKey::PanelLayerEventPoint,
         LayerKind::Place => I18nKey::PanelLayerPlace,
         LayerKind::Label => I18nKey::PanelLayerLabel,
@@ -689,6 +698,8 @@ fn kind_icon(kind: &LayerKind) -> egui::ImageSource<'static> {
         LayerKind::Influence => icons::ICON_FLAG,
         LayerKind::Road => icons::ICON_ROUTE,
         LayerKind::Building => icons::ICON_LANDMARK,
+        // 街区（2026-11-06 D4）：用与「网格/多边形」同族的方框图标。
+        LayerKind::District => icons::ICON_VECTOR_SQUARE,
         LayerKind::EventPoint => icons::ICON_CALENDAR,
         LayerKind::Place => icons::ICON_MAP_PIN,
         LayerKind::Label => icons::ICON_TYPE,

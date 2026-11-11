@@ -26,6 +26,7 @@ pub mod character_level_dialog;
 pub mod city_intent;
 pub mod command_palette_window;
 pub mod continent_dialog;
+pub mod district_form;
 pub mod entity_create_dialog;
 pub mod event_create_dialog;
 pub mod export_png;
