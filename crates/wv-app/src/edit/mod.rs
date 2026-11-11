@@ -35,6 +35,8 @@ pub mod derived_op;
 #[cfg(feature = "app")]
 pub mod diagnostics_bridge;
 #[cfg(feature = "app")]
+pub mod district_tool;
+#[cfg(feature = "app")]
 pub mod editing;
 #[cfg(feature = "app")]
 pub mod faction_panel_actions;

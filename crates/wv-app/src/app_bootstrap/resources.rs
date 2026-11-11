@@ -145,6 +145,8 @@ pub(super) fn insert_all(app: &mut App, config: &AppConfig, center: Vec2, fit_sc
     .init_resource::<VectorLayerEntities>()
     .init_resource::<buildings::BuildingOverlays>()
     .init_resource::<districts::DistrictOverlays>()
+    // 街区工具会话态（2026-11-06 城市街区工具 D4）。
+    .init_resource::<crate::edit::district_tool::DistrictToolState>()
     .init_resource::<terrain_view::atmosphere::AtmosphereLayer>()
     .init_resource::<streets::StreetLayerCache>()
     .init_resource::<streets::StreetEditorState>()

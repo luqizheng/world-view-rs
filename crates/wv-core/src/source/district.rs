@@ -245,7 +245,6 @@ pub fn generate_buildings(
     seed: u64,
     streets: &[Vec<Point>],
 ) -> Vec<super::building::Building> {
-    use super::building::Building;
     let params = params.clone().sanitized();
     if ring.len() < 3 {
         return Vec::new();

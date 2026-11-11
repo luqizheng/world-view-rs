@@ -465,6 +465,16 @@ pub(super) fn register(app: &mut App) {
         Update,
         districts::sync_district_overlays.after(vector_layers::sync_vector_layers),
     );
+    // 街区工具驱动（2026-11-06 D4）：把 `SelectionState` 拨到矩形成形模式 +
+    // 消费闭合轮廓开表单。排在 selection 的 commit 之后（要读 `closed`）。
+    app.add_systems(
+        Update,
+        crate::edit::district_tool::drive_and_sync_district_tool
+            .after(wv_render::selection::commit_selection_click)
+            .after(wv_render::selection::commit_selection_shape_drag),
+    );
+    // 街区表单窗（2026-11-06 D4）：上下文浮窗 + 「生成」提交。
+    app.add_systems(Update, crate::ui::district_form::district_form_window);
     app.add_systems(
         Update,
         (

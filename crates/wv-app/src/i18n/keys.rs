@@ -539,6 +539,22 @@ pub enum I18nKey {
     PanelLayerBuilding,
     /// 图层类型：街区（2026-11-06 城市街区工具 D4）
     PanelLayerDistrict,
+    /// 街区表单标题
+    DistrictFormTitle,
+    /// 街区表单：密度
+    DistrictFormDensity,
+    /// 街区表单：楼层带
+    DistrictFormHeight,
+    /// 街区表单：肌理带
+    DistrictFormBlock,
+    /// 街区表单：种子
+    DistrictFormSeed,
+    /// 街区表单：生成按钮
+    DistrictFormGenerate,
+    /// 街区表单：重摇按钮
+    DistrictFormRegenerate,
+    /// 街区表单：取消按钮
+    DistrictFormCancel,
     /// 图层类型默认名：事件点
     PanelLayerEventPoint,
     /// 图层类型默认名：地点
@@ -985,6 +1001,8 @@ pub enum I18nKey {
     MapControlsEditCellHint,
     /// 点选工具瓷砖 tooltip（ADR-0057 补记 6：点选进统一选区，不落笔）
     MapControlsPointSelectHint,
+    /// 街区框选工具提示（2026-11-06 城市街区工具 D4）
+    MapControlsDistrictHint,
     // （MapControlsFloodSelectHint 已随泛洪工具退役删除，ADR-0086。）
     /// 海拔分层设色强度·标签（ADR-0055；ADR-0086 起在 topOptionBar）
     HypsometricTintLabel,
@@ -1703,7 +1721,7 @@ pub enum I18nKey {
 
 impl I18nKey {
     /// 所有键的稳定数组，供测试遍历。
-    pub const ALL: [I18nKey; 726] = [
+    pub const ALL: [I18nKey; 735] = [
         // 公共动作（12）
         I18nKey::CommonDelete,
         I18nKey::CommonCancel,
@@ -1970,6 +1988,14 @@ impl I18nKey {
         I18nKey::PanelLayerRoad,
         I18nKey::PanelLayerBuilding,
         I18nKey::PanelLayerDistrict,
+        I18nKey::DistrictFormTitle,
+        I18nKey::DistrictFormDensity,
+        I18nKey::DistrictFormHeight,
+        I18nKey::DistrictFormBlock,
+        I18nKey::DistrictFormSeed,
+        I18nKey::DistrictFormGenerate,
+        I18nKey::DistrictFormRegenerate,
+        I18nKey::DistrictFormCancel,
         I18nKey::PanelLayerEventPoint,
         I18nKey::PanelLayerPlace,
         I18nKey::PanelLayerLabel,
@@ -2175,6 +2201,7 @@ impl I18nKey {
         I18nKey::MapControlsClearMeasurements,
         I18nKey::MapControlsEditCellHint,
         I18nKey::MapControlsPointSelectHint,
+        I18nKey::MapControlsDistrictHint,
         I18nKey::HypsometricTintLabel,
         I18nKey::HypsometricTintHint,
         I18nKey::CellFloodBySurface,
