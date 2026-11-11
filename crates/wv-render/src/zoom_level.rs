@@ -81,7 +81,19 @@ use wv_core::World;
 /// 内容支撑，80× 只会得到放大的色块。32× 取「糊线以下、刷格子仍可用」的折中：
 /// 4096² 满配栅格（1 wu/格）在 720px 窗口约 5–6 px/格，1024² 栅格约 22 px/格。
 /// 逐级相乘的总跨度仍由各级**尺寸比**提供（见模块文档表格），不依赖本常量。
+///
+/// **2026-11-06 城市街区工具设计 D5 分级**：世界图收浅到
+/// [`LEVEL_ZOOM_SPAN_WORLD`]（8×，等高线+色带在 8× 仍可读，再深是空放大）；
+/// 本常量保留为**非世界级**（城市/城区/街道）的档距——那里有建筑+街道内容
+/// 支撑深放大。生效点在 [`level_zoom`] 按 `MapLevel` 选档。
 pub const LEVEL_ZOOM_SPAN: f32 = 32.0;
+
+/// **世界级**的级内档距（2026-11-06 设计 D5）：8×。
+///
+/// 世界图的内容 = 等高线 + 色带 + 晕渲 + POI——1 km 格底图在深放大处是
+/// 插值色块；8×（4096/800px → 内界 0.64）足以读等高线与色带语义，
+/// 更深的观察需求由子图（城市图 32×）承担。
+pub const LEVEL_ZOOM_SPAN_WORLD: f32 = 8.0;
 
 /// 级内往外可退的宽松度（外界 = `fit * LEVEL_OVERVIEW`）。
 ///
@@ -132,10 +144,16 @@ impl LevelZoom {
     /// 尺寸退化（0 或负数、NaN）时退回 [`FALLBACK_MAP_SIZE`]：宁可给一个保守
     /// 区间，也不要产出 `NaN` 把相机写坏。
     pub fn for_map(map_size: Vec2, window_size: Vec2) -> Self {
+        Self::for_map_with_span(map_size, window_size, LEVEL_ZOOM_SPAN)
+    }
+
+    /// 指定档距的版本：[`level_zoom`] 按 `MapLevel` 分级消费（D5）；
+    /// [`Self::for_map`] 是「非世界级 32×」的便捷特化。
+    pub fn for_map_with_span(map_size: Vec2, window_size: Vec2, span: f32) -> Self {
         let fit = fit_scale(map_size, window_size);
         Self {
             fit,
-            min: fit / LEVEL_ZOOM_SPAN,
+            min: fit / span,
             max: fit * LEVEL_OVERVIEW,
         }
     }
@@ -217,7 +235,17 @@ pub fn level_zoom(
     window_size: Vec2,
     fallback: Vec2,
 ) -> LevelZoom {
-    LevelZoom::for_map(map_size_of(world, current, fallback), window_size)
+    let size = map_size_of(world, current, fallback);
+    // D5 分级：世界图 8×，其余级 32×（城市/城区有建筑+街道内容支撑）。
+    let span = current
+        .and_then(|id| world.maps.iter().find(|m| &m.id == id))
+        .map(|m| m.level)
+        .unwrap_or(wv_core::map::MapLevel::City);
+    let span = match span {
+        wv_core::map::MapLevel::World => LEVEL_ZOOM_SPAN_WORLD,
+        _ => LEVEL_ZOOM_SPAN,
+    };
+    LevelZoom::for_map_with_span(size, window_size, span)
 }
 
 /// 把非有限/非正的尺寸换成兜底值，避免 `fit` 产出 `NaN`。
@@ -354,6 +382,38 @@ mod tests {
             child.max,
             parent.min
         );
+    }
+
+    /// D5 分级：世界图（MapLevel::World）经 [`level_zoom`] 的内界 = fit/8；
+    /// 城市图保持 fit/32。当前图缺省（None）按非世界级处理（保守档）。
+    #[test]
+    fn world_level_zooms_in_eight_x_while_city_keeps_thirty_two() {
+        let w = world_with(vec![map(
+            "map_world",
+            MapLevel::World,
+            Some(Extent::sized(4096.0, 4096.0)),
+        )]);
+        let world = level_zoom(
+            &w,
+            Some(&Id::new_unchecked("map_world")),
+            Vec2::new(1280.0, 800.0),
+            Vec2::splat(FALLBACK_MAP_SIZE),
+        );
+        assert!((world.min - 5.12 / 8.0).abs() < 1e-4, "世界内界应 = fit/8，得 {}", world.min);
+        assert!((world.max - 8.0).abs() < 1e-4, "外界不受分档影响");
+
+        let c = world_with(vec![map(
+            "map_city",
+            MapLevel::City,
+            Some(Extent::sized(1024.0, 1024.0)),
+        )]);
+        let city = level_zoom(
+            &c,
+            Some(&Id::new_unchecked("map_city")),
+            Vec2::new(1280.0, 800.0),
+            Vec2::splat(FALLBACK_MAP_SIZE),
+        );
+        assert!((city.min - 1.28 / 32.0).abs() < 1e-5, "城市内界保持 fit/32，得 {}", city.min);
     }
 
     #[test]

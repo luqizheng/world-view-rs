@@ -85,6 +85,9 @@ pub struct LayerFrame {
     pub place: LayerBinding,
     /// 建筑层绑定（ADR-0016 §6）。
     pub building: LayerBinding,
+    /// 街区层绑定（2026-11-06 城市街区工具 D4）：街区圈（参数留种区）
+    /// 的描边 / 填充渲染走独立 overlay，可见 / 透明 / z 偏移同管线。
+    pub district: LayerBinding,
     /// 标签层绑定（ADR-0017 · Q1 用户拍板"进独立渲染组"）。
     ///
     /// 与 `Place` / `Road` / `Influence` 平级——可见 / 透明 / z 偏移走
@@ -118,6 +121,8 @@ impl LayerFrame {
                 ..LayerBinding::NEUTRAL
             },
             border: LayerBinding::NEUTRAL,
+            // 街区层（2026-11-06 D4）：缺省全开（作者框了街区就该看得见）。
+            district: LayerBinding::NEUTRAL,
             influence: LayerBinding {
                 visible: view.factions_visible,
                 ..LayerBinding::NEUTRAL
@@ -187,6 +192,10 @@ fn kind_index(kind: &LayerKind) -> usize {
         LayerKind::Building => 6,
         LayerKind::Label => 7,
         LayerKind::Custom => 8,
+        // 街区层（2026-11-06 D4）：新增在**尾部**——kind_index 的槽位号
+        // 是渲染层内部序号（按 LayerKind 枚举序排列的旧表），追加到 9 不动
+        // 既有槽位号（避免动 z 偏移语义）。
+        LayerKind::District => 9,
     }
 }
 
@@ -202,6 +211,7 @@ fn slot_visible_default(frame: &LayerFrame, kind: &LayerKind) -> bool {
         LayerKind::Building => frame.building.visible,
         LayerKind::Label => frame.label.visible,
         LayerKind::Custom => frame.custom.visible,
+        LayerKind::District => frame.district.visible,
     }
 }
 
@@ -217,6 +227,7 @@ fn slot_mut<'f>(frame: &'f mut LayerFrame, kind: &LayerKind) -> &'f mut LayerBin
         LayerKind::Building => &mut frame.building,
         LayerKind::Label => &mut frame.label,
         LayerKind::Custom => &mut frame.custom,
+        LayerKind::District => &mut frame.district,
     }
 }
 

@@ -1034,6 +1034,10 @@ fn poi_kind_color(kind: PoiKind) -> Color {
         Danger => GOOGLE_POI_DANGER,
         Fortress => GOOGLE_POI_FORTRESS,
         Camp => GOOGLE_POI_CAMP,
+        // 2026-11-06 城市街区工具 D6：治安 / 住宅。复用既有两色
+        // （政务紫蓝 / 居住暖褐）——新增独立色需动主题色板（2.0 再做）。
+        Police => GOOGLE_POI_GOVERNMENT,
+        House => GOOGLE_POI_LODGING,
         Settlement | Other => GOOGLE_PLACE_DOT,
     }
 }
