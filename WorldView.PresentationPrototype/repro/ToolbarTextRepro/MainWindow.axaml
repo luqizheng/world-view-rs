@@ -1,0 +1,20 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ToolbarTextRepro.MainWindow"
+        Title="Toolbar text repro - 6 buttons"
+        Width="900" Height="220">
+  <!-- MINIMAL REPRODUCIBLE CASE (TV-01 known issue #1):
+       Horizontal StackPanel with N short-text buttons under SimpleTheme + UseHarfBuzz.
+       Observation on Avalonia 12.1.6 / Windows: the FIRST TWO buttons render their text
+       as several overlapping glyph layers (sometimes strings not present anywhere in the
+       project); the remaining buttons render correctly. Toggle the UseHarfBuzz() call in
+       Program.cs to test whether shaping configuration matters. -->
+  <StackPanel Orientation="Horizontal" Margin="16">
+    <Button Content="Load 1K"  Width="104" Margin="0,0,6,0" />
+    <Button Content="Load 10K" Width="104" Margin="0,0,6,0" />
+    <Button Content="Load 50K" Width="104" Margin="0,0,6,0" />
+    <Button Content="Rebuild (new version)" Width="170" Margin="0,0,6,0" />
+    <Button Content="Zoom +"   Width="84"  Margin="0,0,6,0" />
+    <Button Content="Reset view" Width="104" />
+  </StackPanel>
+</Window>
