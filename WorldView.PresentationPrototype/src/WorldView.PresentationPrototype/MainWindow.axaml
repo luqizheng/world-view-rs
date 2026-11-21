@@ -1,0 +1,30 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="WorldView.PresentationPrototype.MainWindow"
+        Title="World View TV-01 - Presentation Prototype"
+        Width="1200" Height="760" MinWidth="900" MinHeight="600">
+  <Grid RowDefinitions="Auto,*,Auto,Auto">
+    <!-- toolbar: fixed-width buttons (content auto-measure under Avalonia 12.1.6 + Inter
+         returned zero for the first three buttons on Windows; see validation report). -->
+    <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="8">
+      <Button x:Name="Load1KButton"    Width="104" Margin="0,0,6,0" Click="OnLoad1K" />
+      <Button x:Name="Load10KButton"   Width="104" Margin="0,0,6,0" Click="OnLoad10K" />
+      <Button x:Name="Load50KButton"   Content="Load 50K"   Width="104" Margin="0,0,6,0" Click="OnLoad50K" />
+      <Button x:Name="RebuildButton"   Content="Rebuild (new version)" Width="170" Margin="0,0,6,0" Click="OnRebuild" />
+      <Button x:Name="CancelStressButton" Content="Cancel-stress x20" Width="140" Margin="0,0,6,0" Click="OnCancelStress" />
+      <Button x:Name="ZoomInButton"    Content="Zoom +"     Width="84" Margin="0,0,6,0" Click="OnZoomIn" />
+      <Button x:Name="ZoomOutButton"   Content="Zoom -"     Width="84" Margin="0,0,6,0" Click="OnZoomOut" />
+      <Button x:Name="ResetButton"     Content="Reset view" Width="104" Margin="0,0,6,0" Click="OnReset" />
+    </StackPanel>
+
+    <!-- map viewport -->
+    <Panel Grid.Row="1" x:Name="ViewportHost" />
+
+    <!-- diagnostics -->
+    <TextBox Grid.Row="2" x:Name="DiagnosticsBox" IsReadOnly="True" AcceptsReturn="True"
+             MinHeight="96" MaxHeight="140" FontFamily="Consolas" FontSize="12" Margin="8" />
+
+    <TextBlock Grid.Row="3" x:Name="HintText" Margin="8,0,8,6" FontSize="11" Foreground="Gray"
+               Text="Wheel = zoom at pointer; drag = pan. Version marker (top-left) and DPI readout update per frame." />
+  </Grid>
+</Window>

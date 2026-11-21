@@ -1,0 +1,11 @@
+published v1 drawn v1 prims 1020 violations 0 backend CPU raster
+window bounds 1200x760 client 1200x760 scaling 1.25
+toolbar:
+  Load1KButton: content='Load 1K' bounds=104x26@(0,0) desired=110x26
+  Load10KButton: content='Load 10K' bounds=104x26@(110,0) desired=110x26
+  Load50KButton: content='Load 50K' bounds=104x26@(221,0) desired=110x26
+  RebuildButton: content='Rebuild (new version)' bounds=170x26@(331,0) desired=177x26
+  CancelStressButton: content='Cancel-stress x20' bounds=140x26@(508,0) desired=146x26
+  ZoomInButton: content='Zoom +' bounds=84x26@(654,0) desired=90x26
+  ZoomOutButton: content='Zoom -' bounds=84x26@(745,0) desired=90x26
+  ResetButton: content='Reset view' bounds=104x26@(835,0) desired=110x26

@@ -1,0 +1,10 @@
+# Build outputs
+bin/
+obj/
+artifacts/
+
+# macOS publish bundle (large binaries; rebuild via README instructions)
+test-results/publish-osx-arm64/
+
+# Crash dumps
+tv01-crash.log
