@@ -112,6 +112,17 @@ pub struct DecorRecipe {
     /// **注意双通道**：具名森林地物的树图集走 `FeatureRule::symbol_texture`
     /// （ADR-0045），本字段只管**群系格**上的程序化林团——两者互不替代。
     pub forest_style: SymbolStyle,
+    /// 丘陵符号的画法（ADR-0059 style-per-kind 扩展，2026-11-11）：`None` =
+    /// 不画丘陵半圆丘，起伏交给地形色带 / 等高线 / 晕渲。
+    pub hill_style: SymbolStyle,
+    /// 平原符号的画法：`None` = 不画草点（1.2px 微圆）。
+    pub plains_style: SymbolStyle,
+    /// 沙漠符号的画法：`None` = 不画沙丘双弧。
+    pub desert_style: SymbolStyle,
+    /// 沼泽符号的画法：`None` = 不画芦苇（2 根细三角）。
+    pub marsh_style: SymbolStyle,
+    /// 雪原符号的画法：`None` = 不画雪白丘（雪区表达交给群系真色 / 地形色带）。
+    pub snow_style: SymbolStyle,
 
     // ── 气候带（归一化 y，0 = 北）─────────────────────────────────
     /// 气候带切点：`< cut[0]` = 寒带（针叶）、`[cut[0], cut[1])` = 温带
@@ -202,6 +213,12 @@ pub const WATERCOLOR: DecorRecipe = DecorRecipe {
     mountain_style: SymbolStyle::Default,
     // 森林符号画法：内置三变体程序化形状（ADR-0059 追记一）——同上，保底默认。
     forest_style: SymbolStyle::Default,
+    // 其余五类符号画法：内置默认（与山/林同保底，ADR-0059 style-per-kind）。
+    hill_style: SymbolStyle::Default,
+    plains_style: SymbolStyle::Default,
+    desert_style: SymbolStyle::Default,
+    marsh_style: SymbolStyle::Default,
+    snow_style: SymbolStyle::Default,
     climate_cuts: [0.30, 0.72],
     conifer_ink: VariantInk::new(0.18, 0.36, 0.21, 0.85),
     temperate_ink: VariantInk::new(0.17, 0.34, 0.19, 0.85),
@@ -235,7 +252,10 @@ pub const WATERCOLOR: DecorRecipe = DecorRecipe {
 /// 山符号 / 树图集都是「手绘语汇」——在普通地图里画满山三角是噪声。
 ///
 /// 阈值与气候带仍取地形事实（同 `WATERCOLOR`），只是**画法全关**：渲染层读到
-/// `SymbolStyle::None` 就不画该符号。
+/// `SymbolStyle::None` 就不画山 / 林符号；海洋浪（`OceanWaves` 白弧）也关——
+/// 它不由 `SymbolStyle` 管，而是靠 `wave_band_*` 离岸带参数，故这里把
+/// `wave_band_max_cells` 归零，让所有水格都落在带外、不画白弧（2026-11-11
+/// 用户裁定「海面上的白色浪花也不要」）。
 pub const PROFESSIONAL: DecorRecipe = DecorRecipe {
     mountain_min_h: 1500,
     hill_min_h: 550,
@@ -245,6 +265,13 @@ pub const PROFESSIONAL: DecorRecipe = DecorRecipe {
     // 山符号与林团**都不画**——表达交给地形色带 / 晕渲（ADR-0060 D1）。
     mountain_style: SymbolStyle::None,
     forest_style: SymbolStyle::None,
+    // 其余五类符号也**全关**（2026-11-11 用户裁定「点点全部去除」）：丘陵半圆丘、
+    // 平原草点、沙漠双弧、沼泽芦苇、雪白丘——起伏 / 地物表达交给地形色带。
+    hill_style: SymbolStyle::None,
+    plains_style: SymbolStyle::None,
+    desert_style: SymbolStyle::None,
+    marsh_style: SymbolStyle::None,
+    snow_style: SymbolStyle::None,
     climate_cuts: [0.30, 0.72],
     // 墨色留中性灰阶（万一有符号被其它路径触发，也不会是突兀的墨绿）。
     conifer_ink: VariantInk::new(0.62, 0.65, 0.62, 0.85),
@@ -266,9 +293,11 @@ pub const PROFESSIONAL: DecorRecipe = DecorRecipe {
     size_mul_edit: 1.0,
     size_mul_region: 0.8,
     size_mul_nation: 1.6,
-    wave_band_min_cells: 3,
-    wave_band_max_cells: 9,
-    wave_density_span_cells: 6,
+    // 海洋浪（OceanWaves 白弧）关闭：离岸带外界归零 → 全部水格落在带外、不画。
+    // 2026-11-11 用户裁定移除海面白色浪花（独立于 SeaRecipe.foam，由 decor 配方管）。
+    wave_band_min_cells: 0,
+    wave_band_max_cells: 0,
+    wave_density_span_cells: 0,
     forest_density_gain: 1.0,
 };
 
@@ -344,8 +373,25 @@ mod tests {
     /// 表达交给地形色带 / 晕渲 / 群系面填充。
     #[test]
     fn professional_recipe_draws_no_symbols() {
+        // 七类符号画法全部关闭（2026-11-11 用户裁定「点点全部去除」）：
+        // 山 / 林 / 丘陵 / 平原 / 沙漠 / 沼泽 / 雪原。
         assert_eq!(PROFESSIONAL.mountain_style, SymbolStyle::None);
         assert_eq!(PROFESSIONAL.forest_style, SymbolStyle::None);
+        assert_eq!(PROFESSIONAL.hill_style, SymbolStyle::None);
+        assert_eq!(PROFESSIONAL.plains_style, SymbolStyle::None);
+        assert_eq!(PROFESSIONAL.desert_style, SymbolStyle::None);
+        assert_eq!(PROFESSIONAL.marsh_style, SymbolStyle::None);
+        assert_eq!(PROFESSIONAL.snow_style, SymbolStyle::None);
+    }
+
+    /// 专业制图配方**不画海面白色浪花**（2026-11-11 用户裁定）：`wave_band_max_cells`
+    /// 归零后，所有水格的离岸距离 `d` 都满足 `d > 0 == wave_band_max_cells`，
+    /// 渲染层据此把整片海判定在「带外」、不生成 `OceanWaves` 白弧（见
+    /// `terrain_decor.rs` 的 `d > recipe.wave_band_max_cells` 跳过分支）。
+    #[test]
+    fn professional_recipe_draws_no_ocean_waves() {
+        assert_eq!(PROFESSIONAL.wave_band_max_cells, 0, "海浪离岸带外界须归零");
+        assert_eq!(PROFESSIONAL.wave_band_min_cells, 0, "海浪离岸带内界须归零");
     }
 
     /// 专业制图配方的**阈值**仍取地形事实（与水彩同源）——「不画」是画法决定，

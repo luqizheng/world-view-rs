@@ -365,6 +365,9 @@ impl SiteCtx<'_> {
 
     /// 平原：草点（单颗 1.2px 微圆，稀疏感靠步距）。
     fn plains(&self, out: &mut Vec<SitePrim>, m: f32, r: [f32; 3]) {
+        if self.recipe.plains_style == SymbolStyle::None {
+            return;
+        }
         let (r1, r2) = (r[0], r[1]);
         out.push(SitePrim::circle(
             self.kind,
@@ -376,6 +379,9 @@ impl SiteCtx<'_> {
 
     /// 丘陵：半圆丘（宽 9px 高 5px，底边贴格中心下方）。
     fn hills(&self, out: &mut Vec<SitePrim>, m: f32, r: [f32; 3]) {
+        if self.recipe.hill_style == SymbolStyle::None {
+            return;
+        }
         let r1 = r[0];
         out.push(SitePrim::half_disc(
             self.kind,
@@ -462,6 +468,9 @@ impl SiteCtx<'_> {
 
     /// 雪原：白丘（宽 10px 高 4px 的扁半圆）。
     fn snow(&self, out: &mut Vec<SitePrim>, m: f32, r: [f32; 3]) {
+        if self.recipe.snow_style == SymbolStyle::None {
+            return;
+        }
         let r1 = r[0];
         out.push(SitePrim::half_disc(
             self.kind,
@@ -474,6 +483,9 @@ impl SiteCtx<'_> {
 
     /// 沙漠：两道扁半圆脊错位叠出风向（宽 9/7px、高 3.2/2.6px）。
     fn desert(&self, out: &mut Vec<SitePrim>, m: f32, r: [f32; 3]) {
+        if self.recipe.desert_style == SymbolStyle::None {
+            return;
+        }
         let (r1, r2) = (r[0], r[1]);
         out.push(SitePrim::half_disc(
             self.kind,
@@ -511,6 +523,9 @@ impl SiteCtx<'_> {
 
     /// 沼泽：芦苇（2 根细三角，高 6px）。
     fn marsh(&self, out: &mut Vec<SitePrim>, m: f32, r: [f32; 3]) {
+        if self.recipe.marsh_style == SymbolStyle::None {
+            return;
+        }
         let r1 = r[0];
         let ox = (r1 - 0.5) * 6.0 * m;
         out.push(SitePrim::triangle(
@@ -1441,6 +1456,27 @@ mod tests {
             "白波应为白色系，得 {:?}",
             shallow[0].color
         );
+    }
+
+    #[test]
+    fn professional_recipe_draws_no_terrain_dots() {
+        // 2026-11-11 用户裁定「点点全部去除」：专业制图配方把丘陵 / 平原 / 沙漠 /
+        // 沼泽 / 雪原的画法都设为 `None`，渲染层据此不产任何图元。
+        let pro = crate::theme::decor::PROFESSIONAL;
+        for kind in [
+            DecorKind::Hills,
+            DecorKind::Plains,
+            DecorKind::Desert,
+            DecorKind::Marsh,
+            DecorKind::Snow,
+        ] {
+            let prims = prims_at(kind, DecorBand::Edit, 7, 7, 100, 0.5, None, &pro);
+            assert!(
+                prims.is_empty(),
+                "{:?} 在 PROFESSIONAL 下不应产出图元（用户裁定去除点点）",
+                kind
+            );
+        }
     }
 
     #[test]

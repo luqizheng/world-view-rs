@@ -420,22 +420,23 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         let biome_t = smoothstep(0.5, 0.5 + half_b, biome_d);
         let biome_mix = select(1.0, biome_t, is_land && !nb_is_water);
         if (is_land) {
-            // WV_STRIP bit0 置 1 = 剥掉色板，退回冻结群系表近似色
-            // （biome_raw_approx）——此时下方 pad0.z 混合两端同色，恒等退化。
+            // WV_STRIP bit0 置 1 = 剥掉色带，退回冻结群系表精确色
+            // （`p.biome_table[id]`）——此时下方 pad0.z 混合两端同色，恒等退化。
             // 水面不走本支路（下方 water_c 固定色，不受探针影响）。
             // ADR-0101：底色 = **绝对高程色带**（`elev_ramp_continuous`，
             // 8 阶段内连续渐变，与 CellMap 数据视图同一条色带同源 uniform），
             // 取代旧 `themed_land` 的归一化三阶主题色——主题整合推迟 2.0，
-            // 详见 ADR-0101「theme 解耦」。群系色仍按 `p.pad0.z`（0.5）与
-            // 色带混合：高程主导、群系为修饰。
+            // 详见 ADR-0101「theme 解耦」。群系色按 `p.pad0.z`
+            // （= `ThemePack.biome_tint`，专业制图 0.82）与色带混合：
+            // 群系真色主导、海拔只留极淡起伏底。
             var own_pal = elev_ramp_continuous(h);
             var nb_pal = elev_ramp_continuous(h);
             if ((strip & 1u) != 0u) {
-                own_pal = biome_raw_approx(biome_id);
-                nb_pal = biome_raw_approx(nb_id);
+                own_pal = p.biome_table[biome_id].rgb;
+                nb_pal = p.biome_table[nb_id].rgb;
             }
-            let own = mix(own_pal, biome_raw_approx(biome_id), p.pad0.z);
-            let nb_col = mix(nb_pal, biome_raw_approx(nb_id), p.pad0.z);
+            let own = mix(own_pal, p.biome_table[biome_id].rgb, p.pad0.z);
+            let nb_col = mix(nb_pal, p.biome_table[nb_id].rgb, p.pad0.z);
             base = mix(nb_col, own, biome_mix);
         } else {
             // 固定海水基色（ADR-0101；sRGB 常量过 srgb_to_linear 进线性域）。

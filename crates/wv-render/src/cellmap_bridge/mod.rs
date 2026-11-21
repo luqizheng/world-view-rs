@@ -658,31 +658,31 @@ mod bridge_tests {
             assert!(grid_lines_visible(&view(true)), "旗标开 → 显");
         }
 
-        /// 地形 10 槽必是 `GOOGLE_CORE_TERRAIN`（专业制图色板）。
+        /// WV 单一色板：Map 与 Browse 同源，且都不是 Google 旧地形色（规格 T8）。
         ///
-        /// **防回归**：主题侧这份色板自 2026-10-13 定义以来零消费点；渲染侧
-        /// （`wv-world-cell-map`）另有一份同名抄录表，`shade_google` 一度读的
-        /// 是后者——于是本测试曾经**只验证结构体字段**、对像素无影响（假绿）。
-        /// 2026-10-25 修正：`shade_google` 改读 `CellPalette.core`，本函数才
-        /// 真正成为「普通地图的地形色」的唯一入口。像素级锚点在
-        /// `wv-world-cell-map::cells::tests::google_shade_reads_palette_core…`。
+        /// ① 阶段「移除 `GoogleMap` 硬覆盖」的**结构**予以保留：回退它等于把
+        /// `#AADAFF` 淡水 / `#C9E7C7` 公园绿请回主画布，与 2026-11-13 用户
+        /// 「Google 样式全部去除 + 重新设计一套正确配色」正好相反。
+        /// 两条断言逐位锚定：`core` 相等（同源）+ `≠ GOOGLE_CORE_TERRAIN`
+        /// （不回到旧色）。
         ///
-        /// **ADR-0066 更新**：单风格后「普通地图」与「默认风格」是**同一个**
-        /// ——不再存在「主题色板 ≠ 专业色板」的对照，故那条 `assert_ne` 撤掉，
-        /// 改为断言**两个模式取到同一份**（单风格的直接后果）。
+        /// **CellMap（Topographic）不在本测试范围**：它走冻结的 `CellPack::
+        /// fixture()`（ADR-0054 固定色，JRPG 饱和十色），不参与跨 tab 同纸。
         #[test]
-        fn google_mode_terrain_core_is_the_google_palette() {
+        fn wv_palette_is_shared_across_map_and_browse() {
             let pack = &wv_default_theme::theme_pack::builtin::DEFAULT;
             let google = conv_pack_with(pack, 0.0, crate::state::ViewMode::GoogleMap);
             let themed = conv_pack_with(pack, 0.0, crate::state::ViewMode::VectorFlat);
-            assert_eq!(
-                google.palette.core,
-                wv_default_theme::colors_google::GOOGLE_CORE_TERRAIN,
-                "普通地图的地形基色应是 Google 色板（近白陆地 / 淡水 / 公园绿）"
-            );
+            // WV 单一色板：Map 与 Browse 共用同一份 `WV_CORE_TERRAIN`。
             assert_eq!(
                 google.palette.core, themed.palette.core,
-                "单风格（ADR-0066）：两个模式取到同一份风格色板"
+                "WV 单一色板：Map 与 Browse 必须同源"
+            );
+            // 反向锚点：不回到 Google 旧地形色（近白陆地 / 淡水 / 公园绿）。
+            assert_ne!(
+                google.palette.core,
+                wv_default_theme::colors_google::GOOGLE_CORE_TERRAIN,
+                "WV：GoogleMap 不得再使用 Google 专业色板"
             );
             // 处理旗标：海岸晕 / 纸纹是手绘语汇，普通地图要干净平涂。
             assert_eq!(
@@ -694,6 +694,31 @@ mod bridge_tests {
                 google.treatment, themed.treatment,
                 "单风格：处理旗标也是同一份（EMPTY）"
             );
+        }
+
+        /// T5 · WV 水体 / 雪色逐位镜像冻结群系表（规格 §7）。
+        ///
+        /// `wv-default-theme` 只依赖 `bevy` + `wv-terrain`（ADR-0054 单向依赖），
+        /// **不能**引用 `BIOME_RAW_COLORS`，故 `colors_wv.rs` 只能镜像抄录；
+        /// 真正的跨 crate 一致性断言落在这一侧（`app` feature 下 `wv-render`
+        /// 同时依赖两个 crate）。冻结表是 ADR-0051 / ADR-0054 红线，本测试
+        /// 只读不改。
+        #[test]
+        fn wv_water_and_snow_mirror_the_frozen_biome_table() {
+            let rgb = |c: bevy::color::Color| -> [u8; 3] {
+                let bevy::color::Color::Srgba(s) = c else {
+                    panic!("WV 令牌应为 Srgba")
+                };
+                [
+                    (s.red * 255.0).round() as u8,
+                    (s.green * 255.0).round() as u8,
+                    (s.blue * 255.0).round() as u8,
+                ]
+            };
+            use wv_default_theme::colors_wv as wv;
+            let frozen = wv_world_cell_map::terrain_view::biome_raw::BIOME_RAW_COLORS;
+            assert_eq!(rgb(wv::WV_WATER_SHORE), frozen[14], "咸水 = 冻结表 [14]");
+            assert_eq!(rgb(wv::WV_SNOW), frozen[9], "雪原 = 冻结表 [9]");
         }
 
         /// 专业制图的两处「主题泄漏」必须同时收口（2026-10-25）。

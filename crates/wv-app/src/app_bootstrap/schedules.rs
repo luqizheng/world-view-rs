@@ -644,6 +644,15 @@ pub(super) fn register(app: &mut App) {
         bevy_egui::EguiPrimaryContextPass,
         ui::intent_menu.after(ui::map_controls),
     );
+    // (c) 屏幕空间地图装饰三件套骨架（罗盘 / 图廓 / 图例）：主链已顶满
+    // Bevy 20 元组上限，单独注册；可见性门控全在
+    // `ui::map_furniture::FurnitureGate`（纯逻辑，负向断言见该模块 tests）。
+    // 与世界空间 `PassId::MapFrame` 无关，不复活退役外框。
+    app.init_resource::<ui::map_furniture::MapFurnitureState>();
+    app.add_systems(
+        bevy_egui::EguiPrimaryContextPass,
+        ui::map_furniture::map_furniture_system.after(ui::status_bar),
+    );
     // 「生成城市」对话框（意图菜单打开；居中模态窗）。与菜单同链尾段，
     // 排在其后（先画菜单、后画它弹出的对话框，同帧即可）。
     app.add_systems(

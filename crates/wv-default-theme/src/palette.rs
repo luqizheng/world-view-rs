@@ -22,6 +22,7 @@
 use bevy::prelude::*;
 
 use super::colors;
+use super::colors_wv;
 
 /// 地图配色轴：与视图模式（`ViewMode`，技法轴）**正交**（ADR-0016）。
 ///
@@ -30,7 +31,8 @@ use super::colors;
 /// （`ui-layout.yaml` 的 `map_theme`）引用；将来若要恢复多风格，加变体即可。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MapPalette {
-    /// 默认档（专业制图）：近白陆地 + 淡水 + 公园绿 + 橙黄分级道路。
+    /// 默认档（专业制图 · WV 自有色板）：群系真色主导 + 冷中性矢量层。
+    /// 持久化键仍为 `daylight`（零迁移，见 [`Self::key`]）。
     #[default]
     Daylight,
 }
@@ -216,55 +218,78 @@ impl PaletteColors {
         &Self::DEFAULT
     }
 
-    /// **默认风格色板 = 专业制图**（ADR-0066）。
+    /// **默认风格色板 = 专业制图 · WV 自有色板**（ADR-0066；2026-11-13 重绑）。
     ///
-    /// 风格色取百度 / Google 普通地图那套：近白陆地 + 淡水 + 公园绿 + 橙黄
-    /// 分级道路 + 分类 POI + 中性灰描线。底图极简，要素（道路 / 注记 / POI）
-    /// 才是可读性的来源——这是「专业地图」与「艺术地图」的根本分野。
+    /// 36 槽按 `docs/reviews/2026-11-13-wv-palette-spec.md §2.4` 全量接到
+    /// [`colors_wv`]：
+    /// - **群系真色主导**：主画布 GPU Themed 走 `biome_table` + `biome_tint=0.82`
+    ///   （`terrain_field.wgsl`），`core` 只在 CPU 留守档 / CellMap 折叠语义消费，
+    ///   故按低信息量折叠设计，不与 21 色群系底抢戏；
+    /// - **矢量层零彩度**：注记 / 道路 / POI / 等值线 / 网格一律五枚中性墨 +
+    ///   冷近白面，层级靠明度分级而非色相；
+    /// - **双通道硬前提**：所有画布文字走「`WV_INK_PRIMARY` 字身 +
+    ///   `WV_PAPER` 纯白晕圈」。一级墨压最暗群系底仅 1.68:1、纯白对它是
+    ///   6.23:1，反之亮群系上深墨 9.56:1、纯白 1.09:1——单墨通道不可判；
+    /// - **唯一强调色**：事件族 POI / 海名 / 深水位取石板蓝 `#2A5D8F`
+    ///   （= GPU `WATER_SRGB`），全幅占比极小，不引入新色相。
     ///
-    /// **逐格技术色**（[`Self::kind_core`]）沿用旧的十色高饱和表：它是**色块 /
-    /// 编辑视图**的对照色，不参与专业制图的底图渲染。
+    /// **逐格技术色**（[`Self::kind_core`]）仍沿用高饱和十色：它是**色块 / 编辑
+    /// 视图**的对照色，不参与底图渲染。分区色 [`Self::district`] 12 槽暖褐为
+    /// 范围外残留（规格 D5），本轮不动。
+    ///
+    /// POI 4 族从 Google 品牌四色改为「3 档中性明度 + 事件族唯一石板蓝」：
+    /// Place=`WV_INK_PRIMARY` / Faction=`WV_INK_SECONDARY` /
+    /// Region=`WV_INK_MUTED` / Event=`WV_ACCENT`，**四值互异**——
+    /// `wv-app::hover_tooltip::kind_color_per_kind_distinct` 是既有产品契约
+    /// （四色是浮窗里区分实体种类的唯一线索，同色即无法分辨）。
+    /// 分类信息由既有 21 枚 POI 图形（ADR-0105）+ 文字标签承载，
+    /// **颜色不再承载分类色相**（沿用 `(c)` L04 / B01 纪律）。
+    ///
+    /// 实施期裁决：规格 §2.4 接线表曾把 `dot_region` / `text_region` 也写作
+    /// `WV_INK_PRIMARY`，与「3 档中性明度」的文字描述自相矛盾（只用了两档）。
+    /// 这里按文字描述用足第三档，见规格文档末尾追记。
     pub const DEFAULT: PaletteColors = PaletteColors {
-        core: super::colors_google::GOOGLE_CORE_TERRAIN,
+        core: colors_wv::WV_CORE_TERRAIN,
         kind_core: colors::CORE_TERRAIN,
         district: colors::DISTRICT_COLORS,
-        soften_keep: super::colors_google::GOOGLE_SOFTEN_KEEP,
-        soften_toward: super::colors_google::GOOGLE_PAPER,
-        poi_dot: super::colors_google::GOOGLE_PLACE_DOT,
-        poi_ring: super::colors_google::GOOGLE_POI_RING,
-        road_stroke: super::colors_google::GOOGLE_ROAD_FILL,
-        road_casing: super::colors_google::GOOGLE_ROAD_CASING,
-        street_major: super::colors_google::GOOGLE_ROAD_FILL,
-        street_minor: super::colors_google::GOOGLE_ROAD_FILL,
-        label_fill: super::colors_google::GOOGLE_LABEL_FILL,
-        label_region: super::colors_google::GOOGLE_LABEL_REGION,
-        label_place: super::colors_google::GOOGLE_LABEL_FILL,
-        label_water: super::colors_google::GOOGLE_LABEL_WATER,
-        dot_place: super::colors_google::GOOGLE_DOT_PLACE,
-        dot_region: super::colors_google::GOOGLE_DOT_REGION,
-        dot_faction: super::colors_google::GOOGLE_DOT_FACTION,
-        dot_event: super::colors_google::GOOGLE_DOT_EVENT,
-        text_place: super::colors_google::GOOGLE_TEXT_PLACE,
-        text_region: super::colors_google::GOOGLE_TEXT_REGION,
-        text_faction: super::colors_google::GOOGLE_TEXT_FACTION,
-        text_event: super::colors_google::GOOGLE_TEXT_EVENT,
-        snow_highlight: super::colors_google::GOOGLE_SNOW_HIGHLIGHT,
-        snow_shadow: super::colors_google::GOOGLE_SNOW_SHADOW,
-        ice_paper: super::colors_google::GOOGLE_ICE_PAPER,
-        ice_ink: super::colors_google::GOOGLE_ICE_INK,
-        ice_shadow: super::colors_google::GOOGLE_ICE_SHADOW,
-        halo_fill: super::colors_google::GOOGLE_LABEL_STROKE,
-        isoline_ink: super::colors_google::GOOGLE_ISOLINE_INK,
-        grid_line: super::colors_google::GOOGLE_GRID_LINE,
-        building_top: super::colors_google::GOOGLE_BUILDING_TOP,
-        building_side: super::colors_google::GOOGLE_BUILDING_SIDE,
-        event_backdrop: super::colors_google::GOOGLE_EVENT_BACKDROP,
-        line_on_light: super::colors_google::GOOGLE_LINE_ON_LIGHT,
-        line_on_mid: super::colors_google::GOOGLE_LINE_ON_MID,
-        line_on_dark: super::colors_google::GOOGLE_LINE_ON_DARK,
-        deep_ocean_blue: super::colors_google::GOOGLE_DEEP_OCEAN_BLUE,
-        water_shore: super::colors_google::GOOGLE_WATER_SHORE,
-        // 海拔色带：专业制图专有（ADR-0067 D3）。
+        soften_keep: colors_wv::WV_SOFTEN_KEEP,
+        soften_toward: colors_wv::WV_SURFACE,
+        poi_dot: colors_wv::WV_INK_PRIMARY,
+        poi_ring: colors_wv::WV_PAPER,
+        road_stroke: colors_wv::WV_ROAD,
+        road_casing: colors_wv::WV_LINE_FAINT,
+        street_major: colors_wv::WV_ROAD,
+        street_minor: colors_wv::WV_ROAD,
+        label_fill: colors_wv::WV_INK_PRIMARY,
+        label_region: colors_wv::WV_INK_PRIMARY,
+        label_place: colors_wv::WV_INK_PRIMARY,
+        label_water: colors_wv::WV_ACCENT,
+        dot_place: colors_wv::WV_INK_PRIMARY,
+        // 第三档中性明度：hover 浮窗四族必须互异（见下方 POI 4 族说明）。
+        dot_region: colors_wv::WV_INK_MUTED,
+        dot_faction: colors_wv::WV_INK_SECONDARY,
+        dot_event: colors_wv::WV_ACCENT,
+        text_place: colors_wv::WV_INK_PRIMARY,
+        text_region: colors_wv::WV_INK_MUTED,
+        text_faction: colors_wv::WV_INK_SECONDARY,
+        text_event: colors_wv::WV_ACCENT,
+        snow_highlight: colors_wv::WV_PAPER,
+        snow_shadow: colors_wv::WV_LINE_FAINT,
+        ice_paper: colors_wv::WV_SURFACE,
+        ice_ink: colors_wv::WV_INK_MUTED,
+        ice_shadow: colors_wv::WV_ICE_SHADOW,
+        halo_fill: colors_wv::WV_PAPER,
+        isoline_ink: colors_wv::WV_INK_MUTED,
+        grid_line: colors_wv::WV_LINE_FAINT,
+        building_top: colors_wv::WV_SURFACE,
+        building_side: colors_wv::WV_LINE_FAINT,
+        event_backdrop: colors_wv::WV_SURFACE,
+        line_on_light: colors_wv::WV_LINE_FAINT,
+        line_on_mid: colors_wv::WV_INK_MUTED,
+        line_on_dark: colors_wv::WV_INK_SECONDARY,
+        deep_ocean_blue: colors_wv::WV_WATER_DEEP,
+        water_shore: colors_wv::WV_WATER_SHORE,
+        // 海拔色带：② 阶段冷灰绿 8 阶（ADR-0067 D3），本轮不动。
         elevation_ramp: Some(super::colors_google::GOOGLE_ELEVATION_RAMP),
         elevation_strength: super::colors_google::GOOGLE_ELEVATION_STRENGTH,
     };
@@ -279,15 +304,14 @@ pub fn colors(p: MapPalette) -> &'static PaletteColors {
 mod tests {
     use super::*;
 
-    /// 专业制图色板的用户定稿色值锚点：防手滑改值。
+    /// WV 默认色板的**用户拍板色值锚点**：防手滑改值。
     ///
-    /// 这些值取自百度 / Google 普通地图，是「专业制图」的视觉契约——改了它们
-    /// 就是改了本软件的默认观感（ADR-0066）。
-    ///
-    /// **2026-10-26 二轮**：陆地 / 纸面由纯白 `#F8F9FA` 改为暖近白 `#F7F5F0`
-    /// （白路与白描边需要一层有温度的底才不糊）；其余六色不变。
+    /// 期望值手抄自 `docs/reviews/2026-11-13-wv-palette-spec.md §2`（不引用
+    /// 实现常量，避免「改一处两处一起错」的假绿）。2026-11-13 用户拍板
+    /// 「重新设计一套正确配色 / A 只重建矢量层色板」后，默认档既不回退到
+    /// Google 旧色，也不沿用 ① 阶段古舆图褐墨纸色。
     #[test]
-    fn professional_palette_user_pinned_hexes_are_stable() {
+    fn wv_palette_user_pinned_hexes_are_stable() {
         let f = |c: Color| -> [u8; 3] {
             let Color::Srgba(s) = c else {
                 panic!("应为 Srgba")
@@ -299,15 +323,42 @@ mod tests {
             ]
         };
         let p = PaletteColors::DEFAULT;
-        assert_eq!(f(p.core[1]), [0xAA, 0xDA, 0xFF], "浅水");
-        assert_eq!(f(p.core[2]), [0xF7, 0xF5, 0xF0], "暖近白陆地");
-        assert_eq!(f(p.core[4]), [0xC9, 0xE7, 0xC7], "公园绿");
-        assert_eq!(f(p.core[8]), [0xBB, 0xDC, 0xC9], "湿绿");
-        assert_eq!(f(p.soften_toward), [0xF7, 0xF5, 0xF0], "暖近白纸面");
-        assert_eq!(f(p.street_major), [0xFF, 0xFF, 0xFF], "道路白填充");
-        assert_eq!(f(p.road_casing), [0xDA, 0xDC, 0xE0], "路缘灰");
-        assert_eq!(f(p.label_fill), [0x3C, 0x40, 0x43], "注记深灰");
-        assert_eq!(f(p.halo_fill), [0xFF, 0xFF, 0xFF], "注记白描边");
+        // §2.3 core 十槽抽查：水体语义槽取 GPU / 冻结表真值，陆面槽冷中性。
+        assert_eq!(f(p.core[1]), [0x9D, 0xC3, 0xD8], "浅水 = 冻结群系表 [14]");
+        assert_eq!(f(p.core[2]), [0xEE, 0xF1, 0xEF], "基础陆 = 冷灰绿海拔带第 0 阶");
+        assert_eq!(f(p.core[4]), [0xE6, 0xEB, 0xE6], "林地 = 低信息量冷中性面");
+        assert_eq!(f(p.core[8]), [0xE2, 0xEA, 0xE3], "沼泽 = 越界回退色");
+        assert_eq!(f(p.soften_toward), [0xEE, 0xF1, 0xEF], "淡化目标 = WV_SURFACE");
+        // §2.4 矢量层令牌：零彩度墨阶 + 纯白双通道。
+        assert_eq!(f(p.street_major), [0xFF, 0xFF, 0xFF], "主干道白填充");
+        assert_eq!(f(p.road_casing), [0xDA, 0xDC, 0xE0], "路缘极淡线");
+        assert_eq!(f(p.label_fill), [0x3C, 0x40, 0x43], "注记一级墨");
+        assert_eq!(f(p.halo_fill), [0xFF, 0xFF, 0xFF], "注记纯白晕圈（双通道）");
+        assert_eq!(f(p.label_water), [0x2A, 0x5D, 0x8F], "海名 = 唯一强调色");
+        // T3/T6：接线必须指向 WV 令牌本身，而不是「恰好同值」的第二份字面量。
+        assert_eq!(p.halo_fill, colors_wv::WV_PAPER, "halo_fill 必须直连 WV_PAPER");
+        assert_eq!(
+            p.deep_ocean_blue, colors_wv::WV_ACCENT,
+            "deep_ocean_blue 必须直连 WV_ACCENT（消两套水色口径）"
+        );
+        assert_eq!(
+            p.water_shore, colors_wv::WV_WATER_SHORE,
+            "water_shore 必须直连冻结表镜像值"
+        );
+        // T4：两头都不取（Google 旧色 / 古舆图暖沙）。
+        assert_ne!(
+            p.core,
+            crate::colors_google::GOOGLE_CORE_TERRAIN,
+            "不得回退到 Google 地形色"
+        );
+        // T11（实施期新增）：hover 浮窗四族必须互异。三档中性明度 + 唯一
+        // 石板蓝凑齐四值；若把 dot_region 并回一级墨就会撞色。
+        let dots = [p.dot_place, p.dot_region, p.dot_faction, p.dot_event];
+        for i in 0..dots.len() {
+            for j in (i + 1)..dots.len() {
+                assert_ne!(dots[i], dots[j], "POI kind {i} 与 kind {j} 同色");
+            }
+        }
     }
 
     /// **风格色**与**逐格技术色**必须不同：前者是专业制图（多数陆上类折叠为

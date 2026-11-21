@@ -69,8 +69,13 @@ pub struct ThemePack {
     pub sea: SeaRecipe,
     /// 群系填色的覆盖强度（ADR-0072 T3）：场管线 Themed 分支陆格的
     /// 「海拔三阶为底、冻结群系表色覆盖」混合强度。`0` = 纯海拔三阶
-    /// （无群系色，转正前的样子）、`1` = 群系色完全替代。专业制图默认
-    /// `0.5`——雪原回白、森林回绿，同时保住三阶的地形读感。
+    /// （无群系色，转正前的样子）、`1` = 群系色完全替代。
+    ///
+    /// **默认 `0.82`（2026-11-11 裁定 · 群系真色主导）**：陆面以冻结群系表色
+    /// 为主（雪原回白、森林回绿、沙漠回暖），海拔色带只留极淡起伏底——与
+    /// 「数据视图诚实」的 ADR-0051/0054 红线一致（群系表永不改），只是让
+    /// 主题观感从「海拔晕渲图」转向「群系分布图」。阴影 / 山脊高光由
+    /// `lch_hillshade` 在混色之后叠加，故立体读感不受影响。
     pub biome_tint: f32,
     /// 覆盖物演绎规则：feature 词汇 → 远 / 近带规则（晕、符号集、密度、采样参数）。
     ///
@@ -294,19 +299,20 @@ impl ActiveThemePack {
 pub mod builtin {
     use super::*;
 
-    /// **默认风格包 = 专业制图**（ADR-0066）。
+    /// **默认风格包 = 专业制图 · WV 自有色板**（2026-11-13 用户拍板）。
     ///
-    /// 主理人 2026-10-25 裁定「软件不需要做 theme 的贴图功能」后，多主题机制
-    /// 整体退役，本包是**唯一**风格：
-    /// - `palette` = [`PaletteColors::DEFAULT`]（近白陆地 + 公园绿 + 分级道路 +
-    ///   分类 POI 的中性灰阶）；
-    /// - `treatment` = [`TreatmentFlags::EMPTY`]（无海岸晕 / 纸纹 / 水彩渐变——
-    ///   手绘语汇整体退场）；
-    /// - `sea` = [`PROFESSIONAL`]（无波纹 / 碎浪 / 排线，只留水深渐变）；
-    /// - `decor` = [`PROFESSIONAL`]（无山符号 / 无树冠贴图）；
-    /// - `overlays` = 森林规则**只留地界晕**（专业制图的绿地是色块，不是树图集）。
+    /// 色板口径见 `docs/reviews/2026-11-13-wv-palette-spec.md`：
+    /// - `palette` = [`PaletteColors::DEFAULT`]，36 槽全量重绑 `colors_wv::WV_*`
+    ///   —— 矢量层零彩度（五枚中性墨别名重导出 `(c)` 三件套令牌）+ 唯一
+    ///   强调色石板蓝 `#2A5D8F`；`elevation_ramp` 仍是 ② 阶段冷灰绿 8 阶；
+    /// - `treatment` = [`TreatmentFlags::EMPTY`]（海岸晕 / 纸纹 / 水彩渐变退场）；
+    /// - `sea` = [`PROFESSIONAL`]（无波纹 / 碎浪 / 排线，海面全平，只留水深渐变）；
+    /// - `decor` = [`DECOR_PROFESSIONAL`]（七类符号全关 / 浪花带归零，陆地无纹理）；
+    /// - `overlays` = 森林规则**只留地界晕**（具名地物的辖域仍用晕表达）。
     ///
-    /// 展示名（2026-10-25 用户裁定）：本 crate 的观感定位 = **专业制图**。
+    /// `biome_tint: 0.82`（2026-11-11 群系真色主导）：主画布 GPU Themed 以冻结
+    /// 群系表为唯一彩色来源，WV 矢量层只承载明度分级；本包不改 `biome_table` /
+    /// `CellPalette` / `TreatmentFlags::EMPTY`。
     pub static DEFAULT: ThemePack = ThemePack {
         id: "default",
         display_name: "专业制图",
@@ -315,7 +321,7 @@ pub mod builtin {
         treatment: TreatmentFlags::EMPTY,
         atlas: None,
         sea: PROFESSIONAL,
-        biome_tint: 0.65,
+        biome_tint: 0.82,
         decor: DECOR_PROFESSIONAL,
         // 森林族（ADR-0032 D2 规则键 = 族）：**只留地界晕**。
         //

@@ -269,6 +269,8 @@ pub fn update_street_labels(
 
     // ADR-0017 §2.9 Q3：街名走 Label 渲染组的 z 和 opacity。
     let label_z = STREET_LABEL_Z + layers.label.z_offset;
+    // ADR-0065：画布标签统一 Noto Sans SC 无衬线；书法衬线体随古舆图语汇
+    // 与 WV 色板一起退场（2026-11-13）。霞鹜文楷仍装配，供主题显式选用。
     let cjk = fonts.label_handle();
     let label_color = match view.mode {
         crate::state::ViewMode::GoogleMap => crate::theme::colors_google::GOOGLE_LABEL_FILL,

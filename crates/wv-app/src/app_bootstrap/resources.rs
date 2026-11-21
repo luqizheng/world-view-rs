@@ -32,6 +32,7 @@ use wv_render::world_projection;
 /// `config.startup_project` 决定首帧是否已处于「加载中」。
 pub(super) fn insert_all(app: &mut App, config: &AppConfig, center: Vec2, fit_scale: f32) {
     app.insert_resource({
+        // 2026-11-13 回退 V1 古舆图纸色，依用户「古舆图全部去除、改为专业色」裁定，恢复原始基线：跟随界面外壳底色。规格 §3.2「留白仍归窗口 chrome」。
         let bg = ShellPalette::DARK.bg_app;
         ClearColor(Color::srgb(bg.r, bg.g, bg.b))
     })
@@ -145,6 +146,9 @@ pub(super) fn insert_all(app: &mut App, config: &AppConfig, center: Vec2, fit_sc
     .init_resource::<VectorLayerEntities>()
     .init_resource::<buildings::BuildingOverlays>()
     .init_resource::<districts::DistrictOverlays>()
+    // 街区 overlay 选中态（sync_district_overlays 以 `Res` 读取——不注册则
+    // 首帧参数校验失败 panic，2026-11-11 启动烟测发现）。
+    .init_resource::<districts::SelectedDistrict>()
     // 街区工具会话态（2026-11-06 城市街区工具 D4）。
     .init_resource::<crate::edit::district_tool::DistrictToolState>()
     .init_resource::<terrain_view::atmosphere::AtmosphereLayer>()

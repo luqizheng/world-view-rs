@@ -1394,6 +1394,8 @@ pub fn update_place_labels(
     }
     let wanted = filtered;
     // CJK 字体（fonts.rs 在 Startup 注册）：缺省字体无中文字形，地名会成方块。
+    // ADR-0065：画布标签统一 Noto Sans SC 无衬线；书法衬线体随古舆图语汇
+    // 与 WV 色板一起退场（2026-11-13）。霞鹜文楷仍装配，供主题显式选用。
     let cjk = fonts.label_handle();
     // 文字色按视图模式走 palette：Google Default Map 用深灰标签。透明度随
     // Place 图层（ADR-0013）。晕边已落地（下方 halo_color + sync_halo，
@@ -1588,6 +1590,8 @@ pub fn update_faction_labels(
         }
     }
     let wanted = filtered;
+    // ADR-0065：画布标签统一 Noto Sans SC 无衬线；书法衬线体随古舆图语汇
+    // 与 WV 色板一起退场（2026-11-13）。霞鹜文楷仍装配，供主题显式选用。
     let cjk = fonts.label_handle();
     // ADR-0017 Q1：势力标签色随 Label 渲染组透明度；色值走 Google 文字深灰
     // （与地名标签同一族，v0.1 不做 per-PlaceKind 主题映射——ADR-0016 §6.1 Q5）。
@@ -1738,6 +1742,8 @@ pub fn update_event_labels(
         }
     }
     let wanted = filtered;
+    // ADR-0065：画布标签统一 Noto Sans SC 无衬线；书法衬线体随古舆图语汇
+    // 与 WV 色板一起退场（2026-11-13）。霞鹜文楷仍装配，供主题显式选用。
     let cjk = fonts.label_handle();
     // 事件标签色同势力标签（Label 渲染组透明度 + Google 文字深灰）。
     let label_color =
@@ -1899,6 +1905,8 @@ pub fn update_region_labels(
     }
     let wanted = filtered;
 
+    // ADR-0065：画布标签统一 Noto Sans SC 无衬线；书法衬线体随古舆图语汇
+    // 与 WV 色板一起退场（2026-11-13）。霞鹜文楷仍装配，供主题显式选用。
     let cjk = fonts.label_handle();
     // 区域标签色同势力/事件标签（Label 渲染组透明度 + Google 文字深灰）。
     // 手绘地图 #2：region 走 `label_region`（最深墨）+ 20px 字号。
@@ -2026,6 +2034,8 @@ pub fn update_sea_labels(
     let label_z = LABEL_Z + layers.label.z_offset;
     let wanted = filtered;
 
+    // ADR-0065：画布标签统一 Noto Sans SC 无衬线；书法衬线体随古舆图语汇
+    // 与 WV 色板一起退场（2026-11-13）。霞鹜文楷仍装配，供主题显式选用。
     let cjk = fonts.label_handle();
     // 字色：古舆图走 `label_water`（青蓝色族 #3F5B6A · DUSK #5A7A88）；Google
     // 走 `GOOGLE_LABEL_FILL` 深灰（与地名同族，v0.1 不做 water 主题区分）。

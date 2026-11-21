@@ -20,11 +20,25 @@ panels:
     height: 312.0
     collapsed: false
     visible: false
+  faction:
+    x: 332.0
+    y: 368.0
+    width: 280.0
+    height: 300.0
+    collapsed: false
+    visible: false
   inspector:
     x: 992.0
     y: 56.0
     width: 300.0
     height: 420.0
+    collapsed: false
+    visible: false
+  landmark:
+    x: 652.0
+    y: 500.0
+    width: 300.0
+    height: 170.0
     collapsed: false
     visible: false
   layers:
@@ -34,6 +48,20 @@ panels:
     height: 168.0
     collapsed: false
     visible: false
+  line_poi:
+    x: 652.0
+    y: 696.0
+    width: 280.0
+    height: 180.0
+    collapsed: false
+    visible: false
+  minimap:
+    x: 992.0
+    y: 636.0
+    width: 288.0
+    height: 244.0
+    collapsed: false
+    visible: true
   region:
     x: 332.0
     y: 680.0
@@ -41,10 +69,17 @@ panels:
     height: 200.0
     collapsed: false
     visible: false
+  situation:
+    x: 652.0
+    y: 380.0
+    width: 300.0
+    height: 308.0
+    collapsed: false
+    visible: false
   timeline:
-    x: 12.0
-    y: 636.0
-    width: 1256.0
+    x: 0.0
+    y: 608.0
+    width: 1280.0
     height: 164.0
     collapsed: false
     visible: true
@@ -72,3 +107,9 @@ map_dock_pos: null
 map_zoom_strip_pos:
 - 142.40001
 - -689.5999
+brush:
+  radius: 96.0
+  softness: 0.5
+  strength: 1.0
+  kind: 3
+  tool: 0

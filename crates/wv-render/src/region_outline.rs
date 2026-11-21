@@ -51,6 +51,17 @@ pub const REGION_FILL_Z: f32 = 0.064;
 /// 轮廓线宽（屏幕像素）。
 const OUTLINE_STROKE_PX: f32 = 1.6;
 
+/// 非 CellMap 分支的区域轮廓色：WV 色板一级墨 `#3C4043` @0.85。
+///
+/// 直接读 `wv_default_theme::colors_wv::WV_INK_PRIMARY` 再施加 alpha，不在渲染
+/// 层写第二份裸 RGB（色值唯一出处纪律）。2026-11-13 起替代 ① 阶段古舆图褐墨。
+fn wv_outline_ink() -> Color {
+    let Color::Srgba(s) = wv_default_theme::colors_wv::WV_INK_PRIMARY else {
+        return wv_default_theme::colors_wv::WV_INK_PRIMARY;
+    };
+    Color::srgba(s.red, s.green, s.blue, 0.85)
+}
+
 /// 底色覆盖的不透明度（0..1）——**半透明**：底图的地形层次要透出来，
 /// 覆盖层是「给这片地定个性」，不是「刷一层漆」。
 const FILL_ALPHA: f32 = 0.28;
@@ -403,11 +414,12 @@ pub fn sync_region_outlines(
         z: REGION_OUTLINE_Z,
     };
     // 2026-10-22 验收：CellMap（Topographic + nature overlay）下轮廓=白色
-    // （数据视图不随主题）；其他模式沿用深蓝。材质按模式重建。
+    // （数据视图不随主题）；其他模式（Browse / Map 主画布）走 WV 一级墨
+    // `#3C4043` @0.85（2026-11-13），与中性注记 / 岸线同族；古舆图褐墨退场。
     let outline_color = if in_cellmap {
         Color::srgba(1.0, 1.0, 1.0, 0.9)
     } else {
-        Color::srgba(0.21, 0.35, 0.48, 0.85)
+        wv_outline_ink()
     };
     let color_changed = pool
         .outline_material

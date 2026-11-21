@@ -40,6 +40,7 @@ pub mod layers_panel;
 pub mod line_poi_panel;
 pub mod list_panels_panel;
 pub mod map_controls;
+pub mod map_furniture;
 pub mod map_properties_dialog;
 pub mod map_scale_bar;
 pub mod map_tree;

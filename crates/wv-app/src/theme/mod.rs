@@ -31,7 +31,9 @@ pub use wv_ui::{ui_theme, ui_tokens};
 // 渲染配色：色板 / 装饰旗标 / 覆盖物规则的**本体在 wv-theme**（ADR-0043），
 // 这里 `pub use` 保持 `crate::theme::colors::*` 等既有路径对全部 UI 代码继续可达。
 // `fonts` 留在 wv-render（字体装配的消费方是渲染侧的 Text2d 标签系统）。
-pub use wv_default_theme::{colors, colors_google, palette};
+// `colors_wv` 是 2026-11-13 起矢量层的唯一色表；与其余三件一起 re-export，
+// 让 UI 侧 `crate::theme::colors_wv::X` 路径可达（不新增第二份色值）。
+pub use wv_default_theme::{colors, colors_google, colors_wv, palette};
 pub use wv_render::theme::fonts;
 
 /// 世界色令牌 → egui 颜色（UI 层画世界语义色时经此桥接）。

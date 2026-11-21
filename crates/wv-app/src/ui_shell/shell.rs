@@ -242,8 +242,9 @@ pub(crate) fn apply_panel_reset(
 
 /// 窗口清屏色跟随界面外壳底色（日夜模式切换时）。
 ///
-/// 清屏色只在**地图外**可见（地图铺满时被完全盖住），属于应用外壳而非地图配色；
-/// 亮色模式下若仍留着暗色底，窗口边缘会有一圈割裂的黑边。
+/// 2026-11-13 回退 V1 纸色，恢复原始基线；留白归窗口 chrome（规格 §3.2）。
+/// 清屏色只在**地图外**可见（地图铺满时被完全盖住），属于应用外壳而非地图
+/// 配色；亮色模式下若仍留着暗色底，窗口边缘会有一圈割裂的黑边。
 pub(crate) fn sync_window_clear_color(cfg: Res<UiShellConfig>, mut clear: ResMut<ClearColor>) {
     if !cfg.is_changed() {
         return;

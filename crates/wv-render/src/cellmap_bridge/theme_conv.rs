@@ -22,27 +22,24 @@ pub fn shade_mode_of(mode: crate::state::ViewMode) -> ShadeMode {
 }
 
 /// 色板换算（字段 1:1）。
-/// 地形底图色板：`GoogleMap` 模式下把 `core` 换成 `GOOGLE_CORE_TERRAIN`。
 ///
-/// **为什么必须在这里换**：`colors_google::GOOGLE_CORE_TERRAIN` 自 2026-10-13
-/// 定义以来**没有任何消费点**（`colors_google.rs` 注释提到的 `shade_google`
-/// 从未存在过）——`ViewMode::GoogleMap` 的地形一直画的是**主题色板**（日间
-/// 水彩褐阶），所以切过去也不像普通地图。本函数是那份色板的第一个、也是最
-/// 唯一的消费入口。
+/// **WV 单一色板（2026-11-13）**：`GoogleMap`（Map tab）与 `VectorFlat`
+/// （Browse）都直接透传默认档 [`wv_default_theme::palette::PaletteColors::DEFAULT`]
+/// （= `colors_wv::WV_*`），不再按模式换地形色。
 ///
-/// 只换 `core` 与 `soften_toward`（近白纸面）：标注 / 道路 / POI 色在
-/// `vector_layers` 已按模式分支取 `GOOGLE_LABEL_*` / `GOOGLE_ROAD_*`，不必
-/// 在这里重复。
+/// 原 `GoogleMap` 硬覆盖 `core` / `soften_toward` 到 `GOOGLE_*` 的分支已移除，
+/// **该结构予以保留**：回退它等于把 `#AADAFF` 淡水 / `#C9E7C7` 公园绿请回主
+/// 画布，与用户「Google 样式全部去除」的裁定相反。`GOOGLE_CORE_TERRAIN` 仅作为
+/// 历史常量保留定义于 `colors_google.rs`（红线要求不删），本入口零消费。
+///
+/// `mode` 仍保留在签名里（调用链 `conv_pack_with` / `biome_fill` 都按模式传参，
+/// 保留签名零改动），但本函数对它已是无操作——模式差异完全由 `conv_pack_with`
+/// 的 treatment / sea / hypsometric 截断承担，不再动 terrain 色。
 pub fn conv_palette_terrain(
     p: &wv_default_theme::palette::PaletteColors,
-    mode: crate::state::ViewMode,
+    _mode: crate::state::ViewMode,
 ) -> CellPalette {
-    let mut c = conv_palette(p);
-    if mode == crate::state::ViewMode::GoogleMap {
-        c.core = wv_default_theme::colors_google::GOOGLE_CORE_TERRAIN;
-        c.soften_toward = wv_default_theme::colors_google::GOOGLE_SOFTEN_TOWARD;
-    }
-    c
+    conv_palette(p)
 }
 
 pub fn conv_palette(p: &wv_default_theme::palette::PaletteColors) -> CellPalette {
@@ -189,7 +186,8 @@ pub fn conv_pack_with(
 ) -> CellPack {
     let cartographic = mode == crate::state::ViewMode::GoogleMap;
     CellPack {
-        // GoogleMap 的地形色由 `conv_palette_terrain` 换成 GOOGLE_CORE_TERRAIN。
+        // WV 单一色板：GoogleMap 不再换色，`conv_palette_terrain` 直接透传默认档，
+        // 与 Browse 共用同一份 `WV_CORE_TERRAIN`。
         palette: conv_palette_terrain(&pack.palette, mode),
         // 专业制图 = 干净平涂：海岸晕 / 水彩渐变 / 纸纹都是「手绘」语汇，
         // 与「普通地图」的一眼看懂相冲突。EMPTY 而非主题旗标。
