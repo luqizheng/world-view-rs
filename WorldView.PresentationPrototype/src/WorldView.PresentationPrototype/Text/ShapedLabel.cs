@@ -13,8 +13,9 @@ namespace WorldView.PresentationPrototype.Text;
 /// Carries two consumers in TV-01:
 ///   1. the Skia direct path  - glyph indices + advances feed an SKTextBlob (Skia draws glyph IDs only,
 ///      it never re-shapes text);
-///   2. the Avalonia path     - the captured <see cref="GlyphRun"/> is drawn via
-///      ImmediateDrawingContext.DrawGlyphRun for metric cross-checking.
+///   2. the metric cross-check - headless tests compare <see cref="GlyphRun"/> bounds against the
+///      layout advance. The application does NOT draw this GlyphRun: TV-01 follow-up showed that
+///      DrawGlyphRun on a hand-built GlyphRun corrupts other text in the window.
 ///
 /// This is the "optional text/glyph presentation data required by the selected Avalonia drawing
 /// route" explicitly permitted by Handoff §5.1. Holding the Avalonia GlyphTypeface here is a

@@ -141,3 +141,28 @@ Each step is cumulative; source edits were reverted afterwards (no committed sou
    hand-built `GlyphRun` path" and carry it into the upstream report.
 4. macOS checklist: not run (no macOS machine available in this session).
 
+---
+
+## Experiment A/B/C + interim fix (2026-11-21)
+
+Full report: `docs/presentation/TV-01_FOLLOWUP_TOOLBAR_TEXT_CORRUPTION.md`.
+
+- **A (TextLayout GlyphRun):** drawing a `GlyphRun` obtained from Avalonia `TextLayout` through
+  the same `DrawingContext.DrawGlyphRun` is **clean** (2/2 runs); drawing the hand-built
+  `GlyphRun` from `TextShapingService.Shape` is corrupted (2/2 runs).
+  Evidence: `test-results/console-exp-a-{manual,textlayout}-run{1,2}.png`.
+- **B (construct vs consume):** shaping + `GlyphRun` construction WITHOUT drawing is **clean**;
+  only the `DrawGlyphRun` consumption of the hand-built run corrupts.
+  Evidence: `test-results/console-exp-b-construct-only.png`, `console-exp-b-off.png`.
+- **C (standalone minimal project):** `repro/ToolbarTextRepro` with the same 20 mixed-script
+  labels, same hand-built construction, code-behind button content, optional startup suite and
+  optional delayed activation — **does NOT reproduce** in any combination. Therefore this is
+  NOT declared an Avalonia framework defect.
+  Evidence: `test-results/console-exp-c-*.png`.
+- **Interim fix:** `DrawGlyphRunSamples` removed from `MapViewport.Render` (diagnostic code no
+  longer in the production render path). Toolbar is clean in Debug and Release; 33/33 tests pass.
+  Evidence: `test-results/console-after-fix-{debug,release}-toolbar.png`.
+- Confidence: **Strongly Indicated** — trigger is confirmed inside the prototype; whether it is a
+  framework defect remains unresolved because the standalone project cannot reproduce it.
+
+

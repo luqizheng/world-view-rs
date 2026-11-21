@@ -4,7 +4,6 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
-using Avalonia.Media.Immutable;
 using Avalonia.Threading;
 using WorldView.PresentationPrototype.Diagnostics;
 using WorldView.PresentationPrototype.Scene;
@@ -171,39 +170,11 @@ public sealed class MapViewport : Control
         context.FillRectangle(Brushes.FloralWhite, frame.LogicalBounds);
         context.Custom(new MapDrawOperation(frame, _renderer, _diagnostics));
 
-        // Avalonia glyph path (DrawGlyphRun) - metric cross-check samples, presentation-only.
-        DrawGlyphRunSamples(context);
+        // NOTE: the former DrawGlyphRun metric samples were removed from the production render
+        // path (TV-01 follow-up). Drawing the hand-built GlyphRun produced by
+        // TextShapingService.Shape with DrawingContext.DrawGlyphRun corrupted the text of other
+        // controls in the same window. Glyph-run metrics stay covered by headless tests.
     }
-
-    private void DrawGlyphRunSamples(DrawingContext context)
-    {
-        // Draw the same shaped labels the Skia path draws, through Avalonia's own glyph
-        // route, so layout metrics can be compared between the two drawing paths.
-        // Position: fixed overlay strip near the bottom of the viewport.
-        var snapshot = _publisher.Current;
-        if (snapshot is null) return;
-
-        double x = 12;
-        var (w, h) = _viewportState.ViewportSize;
-        var y = h - 24;
-
-        foreach (var layer in snapshot.Layers)
-        {
-            foreach (var primitive in layer.Primitives)
-            {
-                if (primitive is not TextLabelPrimitive label) continue;
-
-                // Avalonia's own glyph drawing route (DrawingContext.DrawGlyphRun) - the
-                // metric cross-check counterpart of the Skia SKTextBlob path.
-                context.DrawGlyphRun(new ImmutableSolidColorBrush(ToColor(label.Fill)), label.Shaped.GlyphRun);
-                x += label.Shaped.AdvanceWidth + 18;
-                if (x > w - 120) break;
-            }
-            if (x > w - 120) break;
-        }
-    }
-
-    private static Color ToColor(ColorRgba c) => Color.FromRgb(c.R, c.G, c.B);
 }
 
 /// <summary>DPI scale lookup (device pixels per logical pixel) from the visual root.</summary>

@@ -168,3 +168,15 @@ The Renderer Contract & Scene Model V0.1 was retrieved from `world-view/docs/map
 2. Carry the two TV-01 findings into design: (a) Avalonia text services thread-affinity/serialization; (b) per-frame glyph blob cost at ≥10K labels → adopt the Renderer Contract's batch/text machinery and measure again.
 3. File the toolbar corruption upstream to Avalonia (evidence in §2.1) or switch theme before production UI work.
 4. TV-01's coordinate/snapshot/threading contracts held up under all validations — no architecture boundary needed weakening anywhere in the prototype.
+
+## 8. Update 2026-11-21 — toolbar corruption follow-up
+
+- The `DrawingContext.DrawGlyphRun` metric-sample overlay referenced in §3/§4 (rows about "both
+  drawing routes") has been **removed from the production render path**: drawing the hand-built
+  `GlyphRun` produced by `TextShapingService.Shape` corrupted other text in the window. The Skia
+  `SKTextBlob` path is unaffected. Glyph-run metrics remain covered by headless tests.
+- Recommendation 3 is revised: **do not file upstream yet** — the standalone minimal project
+  (`repro/ToolbarTextRepro`) does not reproduce it, so it cannot be presented as a framework defect.
+- Full evidence, Experiment A/B/C, confidence and the added production constraint:
+  `docs/presentation/TV-01_FOLLOWUP_TOOLBAR_TEXT_CORRUPTION.md`.
+
