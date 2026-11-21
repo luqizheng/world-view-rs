@@ -1,0 +1,12 @@
+TV-01 auto benchmark - 2026-11-21T16:59:44.3030211+08:00
+OS: Microsoft Windows NT 10.0.26300.0 | CPU cores: 32
+warmup: features=256 prims=262 buildMs=0.5 snap=v2 frames=1 lastMs=6.12 avgMs=6.12 worstMs=6.12 wsMb=194 gcMb=4 dpi=1.25
+1K: features=1000 prims=1020 buildMs=0.8 snap=v3 frames=1 lastMs=1.38 avgMs=1.38 worstMs=1.38 wsMb=217 gcMb=4 dpi=1.25
+10K: features=10000 prims=10200 buildMs=8.0 snap=v4 frames=1 lastMs=3.72 avgMs=3.72 worstMs=3.72 wsMb=235 gcMb=7 dpi=1.25
+50K: features=50000 prims=51000 buildMs=25.5 snap=v5 frames=1 lastMs=6.23 avgMs=6.23 worstMs=6.23 wsMb=264 gcMb=15 dpi=1.25
+zoom-pulse: frames=94 lastMs=118.35 avgMs=6.46 worstMs=118.35
+violations=0 discardedPublishes=0 shaped=1235
+snapshot: published v5 (discarded 0) | drawn v5 [51000 prims]
+frames: 94 | last 118.3 ms | avg 6.5 ms | worst 118.3 ms | draw thread 4
+build: last scene 25.5 ms | features 50000 | shaped 1235 labels
+viewport: DPI x1.25 | 1907.18 map-unit/px | backend GPU OpenGL | mem 642 MB (GC 18 MB)
