@@ -2,6 +2,10 @@
 
 Date: 2026-11-21
 Status: investigation in progress — root cause NOT yet confirmed; do not declare an Avalonia defect yet.
+Status update (2026-11-21, console machine): **console session reproduces the corruption**, so RDP is
+NOT the trigger. Bisection narrowed the minimal trigger to `DrawingContext.DrawGlyphRun` on the
+hand-built `GlyphRun` in `MapViewport.DrawGlyphRunSamples`; Skia custom draw, background publishing,
+theme, renderer backend and session type are all excluded. See "Console session results" below.
 Baseline: TV-01 commit `7b40861`, Avalonia 12.1.6, Windows 11 (26300), **RDP session**, DPI 1.25.
 
 Symptom (main prototype): the FIRST TWO toolbar buttons ("Load 1K", "Load 10K") render their
@@ -23,6 +27,15 @@ no overlap). Map viewport, diagnostics panel, hint bar are unaffected.
 | 7 | In-process RenderTargetBitmap capture (no screen/RDP pipeline involved) | corrupted → not an RDP capture artifact | `tv01-scene-1k-v7.png` |
 | 8 | Software rendering (`--software`, CPU renderer) | **still corrupted** (run under RDP) | `test-results/tv01-software-toolbar.png` |
 | 9 | Real screen (CopyFromScreen) | corrupted → same as offscreen captures | `tv01-realscreen-toolbar3.png` |
+| 10 | **Console session, GPU (OpenGL)**, main prototype | **still corrupted** → RDP is not the trigger | `test-results/console-gpu-toolbar.png` |
+| 11 | Console session, `--theme-fluent` | still corrupted | `test-results/console-fluent-toolbar.png` |
+| 12 | Console session, `--software` (CPU raster) | still corrupted | `test-results/console-software-toolbar.png` |
+| 13 | Console session, minimal repro (`repro/ToolbarTextRepro`) | **CLEAN** | `test-results/console-repro.png` |
+| 14 | Console, bisect A: no background publishing, 64-feature scene published synchronously on UI thread | still corrupted → background build thread not required | `test-results/console-bisect-a-no-background.png` |
+| 15 | Console, bisect B: `context.Custom(MapDrawOperation)` removed | still corrupted → **Skia custom draw exonerated** | `test-results/console-bisect-b-no-customdraw.png` |
+| 16 | Console, bisect C: `MapViewport` not hosted (toolbar-only window) | **CLEAN** → trigger lives in `MapViewport` render path | `test-results/console-bisect-c-toolbar-only.png` |
+| 17 | Console, bisect D: `DrawGlyphRunSamples(context)` removed (all else restored) | **CLEAN** → minimal trigger = `DrawingContext.DrawGlyphRun` | `test-results/console-bisect-d-no-drawglyphrun.png` |
+| 18 | Console, bisect E: only Latin labels fed to `DrawGlyphRun` | still corrupted → not a cross-typeface/cross-script collision | `test-results/console-bisect-e-latin-only-drawglyphrun.png` |
 
 ## Interpretation so far
 
@@ -54,3 +67,77 @@ dotnet run
 # window shows 6 buttons; compare first two against test-results/tv01-repro-harfbuzz.png
 # toggle UseHarfBuzz() in Program.cs to test the shaping configuration variable
 ```
+
+---
+
+## Console session results — RDP ruled out (2026-11-21)
+
+### Environment
+
+| Item | Value |
+|---|---|
+| OS | Windows 11 Enterprise, build 26300 |
+| Session type | **`console`** — `query session` shows `>console  leo  1  Active`; no `rdp-tcp#N` session exists |
+| DPI | 1.25 (window 1518×997 device px) |
+| GPU | Intel Iris Xe + NVIDIA RTX 4060 Laptop; Avalonia backend `OpenGL` (default) / `CPU raster` (`--software`) |
+| Caveat | An Oray virtual-display driver (`OrayIddDriver Device`) is installed; the OS session is still a local console session |
+| Toolchain | .NET SDK 11.0.100, Avalonia 12.1.6 |
+| Commit | `f9b3697` (main, includes `c2e2bfa`) |
+
+### Per-mode results (real console session)
+
+| Mode | Result | Evidence |
+|---|---|---|
+| Main prototype, GPU (OpenGL) | **corrupted** (first 2 buttons) | `test-results/console-gpu-toolbar.png` |
+| `--theme-fluent` | corrupted | `test-results/console-fluent-toolbar.png` |
+| `--software` (CPU raster) | corrupted | `test-results/console-software-toolbar.png` |
+| Minimal repro `repro/ToolbarTextRepro` | **CLEAN** | `test-results/console-repro.png` |
+
+`dotnet test`: **33/33 passed**.
+
+### Bisection on the console machine
+
+Each step is cumulative; source edits were reverted afterwards (no committed source change).
+
+| Step | Change | Result |
+|---|---|---|
+| A | No background publishing; 64-feature scene built & published synchronously on the UI thread | still corrupted |
+| B | A + `context.Custom(new MapDrawOperation(...))` removed (zero Skia drawing) | still corrupted |
+| C | B + `MapViewport` not added to the visual tree (toolbar-only window) | **CLEAN** |
+| D | Original code, **only** `DrawGlyphRunSamples(context)` removed | **CLEAN** |
+| E | `DrawGlyphRunSamples` kept but fed **Latin/ASCII labels only** | still corrupted |
+
+### Conclusion
+
+- **RDP / GPU-compositor is not the trigger.** The corruption reproduces identically on a real
+  console session, with GPU (OpenGL) and with CPU raster, and with both themes.
+- **Minimal trigger:** `DrawingContext.DrawGlyphRun(glyphRun)` in `MapViewport.DrawGlyphRunSamples`,
+  where `glyphRun` is the hand-built `GlyphRun` created in
+  `TextShapingService.Shape` (`new GlyphRun(glyphTypeface, size, text.AsMemory(), glyphInfos,
+  baselineOrigin, bidiLevel)`), executed every viewport frame.
+- **Excluded variables:** session type (RDP vs console), theme (Simple/Fluent), Inter font,
+  renderer backend (GPU vs CPU), Skia custom draw, background build threads, shaping-thread
+  concurrency, and cross-typeface/cross-script mixing (Latin-only still corrupts).
+- **Observed mechanism (not yet proven upstream):** drawing that hand-constructed `GlyphRun`
+  poisons the glyph cache shared with the toolbar `TextBlock` rendering. The overlapping layers
+  on the toolbar contain the exact multi-script scene-label strings ("city names") that only
+  `DrawGlyphRunSamples` produces. The repro project is clean because it never calls
+  `DrawGlyphRun` — it has no such labels.
+- Why only buttons 1–2: they are the first text content laid out/drawn in the window, so their
+  glyph-cache entries are the ones aliased by the samples. This is an observation, not a proven
+  ordering guarantee.
+
+### Upstream recommendation
+
+1. File an Avalonia issue with a minimal project derived from this prototype: a window with a few
+   `Button`s plus a `Control` whose `Render` calls `DrawingContext.DrawGlyphRun` with a `GlyphRun`
+   built from `TextShaper.Current.ShapeText(...)` + `new GlyphRun(glyphTypeface, size,
+   text.AsMemory(), glyphInfos, baselineOrigin, bidiLevel)`. Include
+   `console-bisect-d-no-drawglyphrun.png` (clean) vs `console-gpu-toolbar.png` (corrupted).
+2. Interim prototype workaround: remove `DrawGlyphRunSamples` from `MapViewport.Render` (metric
+   cross-check is already covered by the headless shaping tests), or obtain the `GlyphRun` through
+   Avalonia's `TextLayout` instead of constructing it by hand.
+3. TV-01 expert-review item 3: close as "not RDP; trigger is the Avalonia `DrawGlyphRun` +
+   hand-built `GlyphRun` path" and carry it into the upstream report.
+4. macOS checklist: not run (no macOS machine available in this session).
+
